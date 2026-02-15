@@ -75,7 +75,7 @@ python app/main.py
 
 Если запускаете `python app/bot.py`, теперь это тоже полноценный старт runtime.
 
-При первом старте Telethon может запросить код авторизации userbot-сессии (это нормально, пока не создан `.session`).
+При первом старте Telethon автоматически запустит интерактивный вход (телефон/код) для userbot-сессии. После успешного входа `.session` сохранится, и повторная авторизация не потребуется.
 
 ## Railway Deploy
 
@@ -119,5 +119,5 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-> Важно: не запускайте `python app/bot.py` как основной стартовый файл. Используйте `python -m app.main`.
-> Если в логах есть сообщение про `session is not authorized`, выполните первый интерактивный вход (номер + код Telegram) и сохраните `.session`.
+> Можно запускать как `python -m app.main`, так и `python app/main.py` (и `python app/bot.py` тоже поддерживается).
+> При первом запуске в терминале введите телефон и код Telegram для создания `.session`.

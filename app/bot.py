@@ -67,10 +67,19 @@ class AppRuntime:
         try:
             logger.info("Starting userbot connection...")
             await self.userbot.connect()
+
             if not await self.userbot.is_user_authorized():
-                logger.error(
-                    "Telethon session is not authorized. Run `python -m app.main` and complete phone/code login once, then restart."
-                )
+                logger.warning("Telethon session is not authorized. Starting interactive login flow...")
+                try:
+                    await self.userbot.start()
+                except (EOFError, OSError):
+                    logger.error(
+                        "Interactive login is unavailable in this environment. Run `python -m app.main` in a terminal and complete phone/code login once."
+                    )
+                    return
+
+            if not await self.userbot.is_user_authorized():
+                logger.error("Telethon session is still not authorized after login attempt.")
                 return
 
             logger.info("Userbot authorized and connected")
