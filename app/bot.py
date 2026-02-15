@@ -2,8 +2,6 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from telethon import TelegramClient, events
 from telethon.tl.types import Message
 
@@ -21,10 +19,7 @@ def _extract_text(msg: Message) -> str:
 
 class AppRuntime:
     def __init__(self) -> None:
-        self.bot = Bot(
-            token=config.bot_token,
-            default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
-        )
+        self.bot = Bot(token=config.bot_token)
         self.dispatcher = Dispatcher()
         self.userbot = TelegramClient(config.session_name, config.api_id, config.api_hash)
 
