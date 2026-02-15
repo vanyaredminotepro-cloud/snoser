@@ -32,28 +32,34 @@ class AppRuntime:
         self.dispatcher.include_router(bind_admin_handlers(service))
         worker_task = asyncio.create_task(service.worker())
 
-        source_handles = [v for v in config.source_channels.values()]
+        source_by_username = {
+            v.lower().lstrip("@"): k
+            for k, v in config.source_channels.items()
+            if not v.startswith("+")
+        }
+        invite_only_sources = {
+            k: v for k, v in config.source_channels.items() if v.startswith("+")
+        }
 
-        @self.userbot.on(events.NewMessage(chats=source_handles))
+        if invite_only_sources:
+            logger.warning(
+                "Invite-only sources are skipped from Telethon chat filter until resolvable usernames/IDs are provided: %s",
+                ", ".join(f"{country}:{handle}" for country, handle in invite_only_sources.items()),
+            )
+
+        @self.userbot.on(events.NewMessage)
         async def handler(event: events.NewMessage.Event) -> None:
             text = _extract_text(event.message)
             if not text and not event.message.media:
                 return
 
             channel = await event.get_chat()
+            username = str(getattr(channel, "username", "") or "").lower()
+            country = source_by_username.get(username)
+            if not country:
+                return
+
             title = getattr(channel, "title", None) or getattr(channel, "username", "unknown")
-
-            country = next((k for k, v in config.source_channels.items() if v.lower() in str(title).lower()), None)
-            if country is None:
-                country = next(
-                    (
-                        k
-                        for k, v in config.source_channels.items()
-                        if str(getattr(channel, "username", "")).lower() == v.lower().lstrip("@")
-                    ),
-                    "UNKNOWN",
-                )
-
             post = IncomingPost(
                 source_country=country,
                 source_channel=str(getattr(channel, "username", title)),
@@ -61,7 +67,6 @@ class AppRuntime:
                 text=text,
                 has_media=bool(event.message.media),
             )
-
             await service.enqueue(post)
 
         try:
