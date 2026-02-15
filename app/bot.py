@@ -65,8 +65,15 @@ class AppRuntime:
             await service.enqueue(post)
 
         try:
-            await self.userbot.start()
-            logger.info("Userbot connected")
+            logger.info("Starting userbot connection...")
+            await self.userbot.connect()
+            if not await self.userbot.is_user_authorized():
+                logger.error(
+                    "Telethon session is not authorized. Run `python -m app.main` and complete phone/code login once, then restart."
+                )
+                return
+
+            logger.info("Userbot authorized and connected")
             await asyncio.gather(
                 self.dispatcher.start_polling(self.bot),
                 self.userbot.run_until_disconnected(),
@@ -75,3 +82,23 @@ class AppRuntime:
             worker_task.cancel()
             await self.bot.session.close()
             await self.userbot.disconnect()
+
+
+async def run_from_script() -> None:
+    from app.core.logging_setup import setup_logging
+    from app.storage.database import Database
+
+    setup_logging()
+    logger.info("Starting bot runtime from app/bot.py")
+
+    config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    db = Database(str(config.sqlite_path))
+    await db.init()
+
+    runtime = AppRuntime()
+    service = NewsService(runtime.bot, db)
+    await runtime.run(service)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_from_script())

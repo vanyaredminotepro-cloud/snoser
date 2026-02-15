@@ -1,11 +1,10 @@
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-import uvloop
 
 from app.bot import AppRuntime
 from app.config import config
@@ -16,6 +15,8 @@ from app.storage.database import Database
 
 async def main() -> None:
     setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Booting Telegram RP news bot...")
     config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
 
     db = Database(str(config.sqlite_path))
@@ -27,6 +28,13 @@ async def main() -> None:
     await runtime.run(service)
 
 
-if __name__ == "__main__":
-    uvloop.install()
+def run() -> None:
+    if sys.platform != "win32":
+        import uvloop
+
+        uvloop.install()
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

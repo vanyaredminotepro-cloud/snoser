@@ -67,7 +67,15 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-При первом старте Telethon может запросить код авторизации userbot-сессии.
+Для Windows также поддерживается:
+
+```bash
+python app/main.py
+```
+
+Если запускаете `python app/bot.py`, теперь это тоже полноценный старт runtime.
+
+При первом старте Telethon может запросить код авторизации userbot-сессии (это нормально, пока не создан `.session`).
 
 ## Railway Deploy
 
@@ -100,3 +108,16 @@ python -m app.main
 - Default policy: **DENY BY DEFAULT**.
 - Лучше пропустить сомнительную новость, чем опубликовать non-RP.
 - Военные и OOC-посты не публикуются.
+
+
+### Windows quick start (Python 3.10+)
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python -m app.main
+```
+
+> Важно: не запускайте `python app/bot.py` как основной стартовый файл. Используйте `python -m app.main`.
+> Если в логах есть сообщение про `session is not authorized`, выполните первый интерактивный вход (номер + код Telegram) и сохраните `.session`.
