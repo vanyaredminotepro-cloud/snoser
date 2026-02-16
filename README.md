@@ -123,3 +123,22 @@ python -m app.main
 
 > Можно запускать как `python -m app.main`, так и `python app/main.py` (и `python app/bot.py` тоже поддерживается).
 > При первом запуске в терминале введите телефон и код Telegram для создания `.session`.
+
+
+## Telegram Premium emoji (custom emoji) guide
+
+Сейчас бот использует стандартные emoji-символы. Чтобы отправлять именно Telegram Premium custom emoji, нужно:
+
+1. Взять `custom_emoji_id` нужного emoji (через бота/скрипт, который читает entities из сообщения с premium emoji).
+2. Перейти на HTML parse mode (уже включено в `app/core/services.py`).
+3. Вставлять emoji в текст как:
+   `<tg-emoji emoji-id="1234567890123456789"></tg-emoji>`
+4. Подменить символные emoji в `app/formatters/news_formatter.py` на такие теги.
+
+Пример строки:
+
+```html
+<tg-emoji emoji-id="1234567890123456789"></tg-emoji><b>НОВОСТЬ</b>
+```
+
+Важно: без корректного `custom_emoji_id` Telegram покажет обычный fallback или ничего.

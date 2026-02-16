@@ -1,3 +1,4 @@
+import html
 import re
 
 
@@ -52,23 +53,40 @@ class NewsFormatter:
     def rewrite(self, country: str, text: str) -> str:
         return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", text, flags=re.IGNORECASE)
 
+
     @staticmethod
-    def _strip_country_prefix(country: str, text: str) -> str:
-        pattern = rf"^\s*[⚡️🔥📢📰💭🔼🏗️📜💠]*\s*{re.escape(country)}\b[:\-\s]*"
-        stripped = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
-        return stripped if stripped else text
+    def _split_country_and_body(country: str, text: str) -> tuple[str, str]:
+        pattern = rf"^\s*{re.escape(country)}\b[:\-\s]*"
+        body = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+        if body:
+            return country, body
+        return country, text
 
     def format_news(self, country: str, hashtag: str, text: str) -> str:
         cleaned = self._cleanup_text(text)
-        cleaned = self._strip_country_prefix(country, cleaned)
         emoji = self.pick_emoji(cleaned, country)
 
-        if len(cleaned) > 420:
-            main = cleaned[:240].rsplit(" ", 1)[0].strip()
-            details = cleaned[len(main):].strip(" .")
-            return f"{emoji}{main}\n\n▫️*{details}*\n\n{hashtag}"
+        country_title, body_text = self._split_country_and_body(country, cleaned)
+        safe_country = html.escape(country_title)
+        safe_body = html.escape(body_text)
 
-        return f"{emoji}{cleaned}\n\n{hashtag}"
+        if len(cleaned) > 420:
+            main_raw = body_text[:240].rsplit(" ", 1)[0].strip()
+            details_raw = body_text[len(main_raw):].strip(" .")
+            main = html.escape(main_raw)
+            details = html.escape(details_raw)
+            return (
+                f"{emoji}<b>НОВОСТЬ</b>\n\n"
+                f"<blockquote>{emoji} <b>{safe_country}</b> <i>{main}</i></blockquote>\n\n"
+                f"ℹ️ <b><i>Подробности:</i></b> <i>{details}</i>\n\n"
+                f"{hashtag} #Новости"
+            )
+
+        return (
+            f"{emoji}<b>НОВОСТЬ</b>\n\n"
+            f"<blockquote>{emoji} <b>{safe_country}</b> <i>{safe_body}</i></blockquote>\n\n"
+            f"{hashtag} #Новости"
+        )
 
 
 

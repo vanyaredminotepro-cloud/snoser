@@ -4,7 +4,6 @@ import logging
 import uuid
 
 from aiogram import Bot
-from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 
 from app.config import config
@@ -102,7 +101,7 @@ class NewsService:
             await self.bot.send_message(
                 chat_id=config.target_channel,
                 text=formatted,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
