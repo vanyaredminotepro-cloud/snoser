@@ -38,6 +38,11 @@ class Config:
         }
     )
 
+
+    # Optional Telegram Premium custom emoji IDs by country.
+    # Fill with real IDs to render <tg-emoji ...> instead of fallback unicode symbols.
+    premium_emoji_ids: dict[str, str] = field(default_factory=dict)
+
     country_hashtags: dict[str, str] = field(
         default_factory=lambda: {
             "Антония": "#ANT",

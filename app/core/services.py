@@ -75,17 +75,13 @@ class NewsService:
                 await self.send_to_moderation(post, translated, filter_result.reason)
             return
 
-        hashtag = config.country_hashtags.get(post.source_country, "")
-        if not hashtag:
-            await self.bot.send_message(
-                config.admin_id,
-                f"Нет хештега для страны {post.source_country}. Нужна ручная проверка.",
-            )
-            await self.send_to_moderation(post, translated, "MISSING_HASHTAG")
-            return
-
         rewritten = self.formatter.rewrite(post.source_country, translated)
-        formatted = self.formatter.format_news(post.source_country, hashtag, rewritten)
+        formatted = self.formatter.format_news(
+            country=post.source_country,
+            text=rewritten,
+            country_hashtags=config.country_hashtags,
+            premium_emoji_ids=config.premium_emoji_ids,
+        )
 
         if post.has_media:
             await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_MANUAL_REVIEW")
