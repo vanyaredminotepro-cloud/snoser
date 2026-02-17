@@ -7,11 +7,11 @@ class NewsFormatter:
 
     paragraph_emoji_fallback = {
         "important": "❗️",
-        "economy": "🔼",
+        "economy": "📈",
         "diplomacy": "💭",
         "warning": "⚠️",
         "map": "🌐",
-        "default": "👀",
+        "default": "📰",
     }
 
     emoji_rules = {
@@ -49,9 +49,11 @@ class NewsFormatter:
                 break
 
         custom_id = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
+        fallback = self.paragraph_emoji_fallback[label]
         if custom_id:
-            return f'<tg-emoji emoji-id="{custom_id}"></tg-emoji>'
-        return self.paragraph_emoji_fallback[label]
+            # Keep visible fallback symbol inside tag for clients that cannot resolve custom emoji.
+            return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
+        return fallback
 
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
@@ -82,8 +84,8 @@ class NewsFormatter:
                         tags.append(tag)
 
         # semantic meta tags
-        if any(k in low for k in ["теракт"]):
-            tags.append("#Теракт")
+        if "теракт" in low:
+            tags.append("#TERROR")
         if any(k in low for k in ["болез", "вирус", "mks20", "mks40"]):
             if "mks20" in low:
                 tags.append("#MKS20")
@@ -91,7 +93,7 @@ class NewsFormatter:
                 tags.append("#MKS40")
 
         if not tags:
-            tags.append("#РП")
+            tags.append("#RP")
 
         return " ".join(dict.fromkeys(tags))
 
