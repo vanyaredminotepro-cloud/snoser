@@ -38,32 +38,40 @@ class Config:
         }
     )
 
-
-    # Optional Telegram Premium custom emoji IDs by country.
-    # Fill with real IDs to render <tg-emoji ...> instead of fallback unicode symbols.
-    premium_emoji_ids: dict[str, str] = field(default_factory=dict)
-
-    country_hashtags: dict[str, str] = field(
+    # Optional Telegram Premium custom emoji IDs by semantic type (uppercase keys):
+    # DEFAULT, IMPORTANT, ECONOMY, DIPLOMACY, WARNING, MAP
+    premium_emoji_ids: dict[str, str] = field(
         default_factory=lambda: {
-            "Антония": "#ANT",
-            "Вилония": "#VL",
-            "ТНР": "#TNR",
-            "Олбония": "#OB",
-            "Северландия": "#SVR",
-            "Обоссляндия": "#OBS",
-            "Зитор": "#ZT",
-            "Сэрландия": "#SRL",
-            'ЧВК "Компф"': "#KMPF",
-            'Орден "ГНЕВ"': "#GNEV",
-            "Лорд-протекторат": "#LPR",
-            "ФШП": "#FSP",
-            "Белоярск": "#BYR",
-            "Аль-Нуурия": "#ANR",
-            "Крелония": "#KRL",
-            "MANUAL": "#NEWS",
+            "DEFAULT": "5210956306952758910",  # 👀
+            "IMPORTANT": "5274099962655816924",  # ❗️
+            "ECONOMY": "5456140674028019486",  # ⚡️
+            "DIPLOMACY": "5467538555158943525",  # 💭
+            "WARNING": "5447644880824181073",  # ⚠️
+            "MAP": "5447410659077661506",  # 🌐
         }
     )
 
+    country_hashtags: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            'Орден "ГНЕВ"': ["#GNEV"],
+            "Обоссляндия": ["#ОБСС", "#ОБС"],
+            "Олбония": ["#OB", "#ОБ"],
+            "Северландия": ["#СВ", "#SV"],
+            "Зитор": ["#ЗТ", "#ZT"],
+            "СВРО": ["#СВРО", "#SVR"],
+            "ФШП": ["#FHP"],
+            "Вилония": ["#VL"],
+            "Антония": ["#AR"],
+            "ТНР": ["#TNR"],
+            "Крелония": ["#KRL"],
+            "Сэрландия": ["#SRL"],
+            "Лорд-протекторат": ["#LPR"],
+            "Белоярск": ["#BYR"],
+            "Аль-Нуурия": ["#ANR"],
+            'ЧВК "Компф"': ["#KMPF"],
+            "MANUAL": ["#РП"],
+        }
+    )
 
 
 config = Config()
