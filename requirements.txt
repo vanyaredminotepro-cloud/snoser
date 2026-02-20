@@ -1,0 +1,7 @@
+aiogram==3.13.1
+telethon==1.37.0
+aiosqlite==0.20.0
+uvloop==0.20.0
+deep-translator==1.11.4
+
+feedparser==6.0.11
