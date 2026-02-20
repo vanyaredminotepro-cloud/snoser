@@ -92,8 +92,8 @@ class NewsFormatter:
                     if tag not in tags:
                         tags.append(tag)
 
-        if "теракт" in low and "#Теракт" not in tags:
-            tags.append("#Теракт")
+        if "теракт" in low and "#TERROR" not in tags:
+            tags.append("#TERROR")
         if any(k in low for k in ["болез", "вирус", "mks20", "mks40"]):
             if "mks20" in low and "#MKS20" not in tags:
                 tags.append("#MKS20")
@@ -101,7 +101,7 @@ class NewsFormatter:
                 tags.append("#MKS40")
 
         if not tags:
-            tags.append("#РП")
+            tags.append("#RP")
 
         return " ".join(dict.fromkeys(tags))
 

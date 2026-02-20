@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from datetime import datetime
 
@@ -42,6 +43,26 @@ def _extract_media(message: Message) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _extract_hashtags(text: str) -> set[str]:
+    return {f"#{m.upper()}" for m in re.findall(r"#([A-Za-zА-Яа-я0-9_]+)", text)}
+
+
+def _detect_claimed_country(text: str) -> str:
+    tags = _extract_hashtags(text)
+    for country, country_tags in config.country_hashtags.items():
+        upper_tags = {tag.upper() for tag in country_tags}
+        if tags & upper_tags:
+            return country
+    return "MANUAL"
+
+
+def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
+    allowed_ids = config.manual_country_authors.get(country)
+    if not allowed_ids:
+        return True
+    return user_id in allowed_ids or user_id == config.admin_id
+
+
 def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(F.from_user.as_("u"), F.text, ~F.text.startswith("/"))
     async def antiflood_guard(message: Message, u) -> None:  # type: ignore[no-redef]
@@ -57,6 +78,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             "Бот активен.\n"
             "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list\n\n"
             "Для /write_news обязательно укажите хештег страны (например #OBS).\n"
+            "Хештеги публикуются в английском формате.\n"
             "Новость не должна нарушать RP-правила, иначе будет отклонена."
         )
 
@@ -93,7 +115,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
             "Требования:\n"
             "1) Обязательно добавьте хештег страны (#OBS / #OB / #VL и т.д.)\n"
             "2) Не нарушайте RP-правила\n"
-            "3) Медиа всегда уходит на модерацию"
+            "3) Медиа всегда уходит на модерацию\n"
+            "4) Нельзя отправлять новости от лица чужой страны"
         )
 
     @router.message(WriteNewsState.waiting_text)
@@ -107,9 +130,15 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await message.answer("Нужен хештег страны (пример: #OBS). Новость не принята.")
             return
 
+        claimed_country = _detect_claimed_country(text)
+        user_id = message.from_user.id if message.from_user else 0
+        if claimed_country != "MANUAL" and not _is_author_allowed_for_country(claimed_country, user_id):
+            await message.answer("Вы не можете публиковать новости от лица этой страны.")
+            return
+
         file_id, media_type = _extract_media(message)
         post = IncomingPost(
-            source_country="MANUAL",
+            source_country=claimed_country,
             source_channel="manual_admin",
             message_id=message.message_id,
             text=text,

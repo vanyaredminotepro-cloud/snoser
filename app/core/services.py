@@ -11,6 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from app.config import config
 from app.core.models import IncomingPost
+from app.filters.ai_guard import AIGuard
 from app.filters.rp_filter import RPFilter
 from app.formatters.news_formatter import NewsFormatter
 from app.moderation.keyboards import moderation_keyboard
@@ -27,6 +28,7 @@ class NewsService:
         self.bot = bot
         self.db = db
         self.rp_filter = RPFilter()
+        self.ai_guard = AIGuard()
         self.formatter = NewsFormatter()
         self.translator = AutoTranslator()
         self.rss = RSSParser()
@@ -134,6 +136,20 @@ class NewsService:
             return
 
         translated = await self.translator.to_russian(source_text) if source_text else ""
+
+        ai_result = self.ai_guard.analyze(translated or source_text)
+        if not ai_result.allowed:
+            logger.info(
+                "Blocked by AI guard %s (score=%s): %s/%s",
+                ai_result.reason,
+                ai_result.score,
+                post.source_channel,
+                post.message_id,
+            )
+            if post.has_media:
+                await self.send_to_moderation(post, translated or "[MEDIA]", ai_result.reason)
+            return
+
         filter_result = self.rp_filter.check(translated or "media news")
 
         if not filter_result.allowed:
