@@ -1,0 +1,14 @@
+add_namespace = bezus
+
+news_event = {
+    id = bezus.1
+    title = bezus.1.t
+    desc = bezus.1.d
+    picture = GFX_report_event_generic_build_factory
+
+    is_triggered_only = yes
+
+    option = {
+        name = bezus.1.a
+    }
+}

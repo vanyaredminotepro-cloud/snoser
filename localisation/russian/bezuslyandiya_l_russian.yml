@@ -1,0 +1,33 @@
+l_russian:
+ BZU:0 "Безусляндия"
+ BZU_DEF:0 "Безусляндия"
+ BZU_ADJ:0 "безусляндск"
+
+ POLITICS_ALEKSEY_BEZUS_DESC:0 "Лидер-организатор, восстановивший мод после технического хаоса."
+
+ bezuslyandiya_category:0 "Проект Безусляндии"
+ bezuslyandiya_category_desc:0 "Иногда история делает неожиданные повороты."
+ bezuslyandiya_create_country:0 "Провозгласить Безусляндию"
+ bezuslyandiya_create_country_desc:0 "Безусляндия появляется в регионе Берлин (state id = 64), если он под контролем Германии."
+
+ bezus.1.t:0 "Провозглашена Безусляндия"
+ bezus.1.d:0 "На политической карте Европы появилась новая страна — Безусляндия."
+ bezus.1.a:0 "Так и запишем"
+
+ BZU_focus:0 "Путь восстановления"
+ BZU_begin_restoration:0 "Мод восстановлен"
+ BZU_begin_restoration_desc:0 "После отката на древнюю версию мы возвращаемся и начинаем заново."
+ BZU_fix_loading_screen:0 "Починить загрузочный экран"
+ BZU_fix_loading_screen_desc:0 "Часть экранов уже наши, часть ещё ванильные — исправляем постепенно."
+ BZU_expand_industry:0 "Промышленный рывок"
+ BZU_expand_industry_desc:0 "Добавляем фабрики и ускоряем развитие государства."
+ BZU_army_buffs:0 "Усиление армии"
+ BZU_army_buffs_desc:0 "Армия получит нужные баффы и подготовку."
+ BZU_focuses_for_obosslyandiya:0 "Фокусы для Обоссляндии"
+ BZU_focuses_for_obosslyandiya_desc:0 "Развиваем крупную ветку национальных фокусов."
+ BZU_prepare_first_revolt:0 "Подготовка первого мятежа"
+ BZU_prepare_first_revolt_desc:0 "Событийная часть мода готовится к боевым испытаниям."
+ BZU_centrism_course:0 "Курс на центризм"
+ BZU_centrism_course_desc:0 "Закрепляем умеренный политический курс."
+ BZU_beta_in_one_month:0 "Бета через месяц"
+ BZU_beta_in_one_month_desc:0 "Доводим контент и выходим на первую бета-версию."

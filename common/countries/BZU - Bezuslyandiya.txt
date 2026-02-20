@@ -1,0 +1,19 @@
+graphical_culture = eastern_european_gfx
+graphical_culture_2d = eastern_european_2d
+
+color = { 120 10 130 }
+
+party = {
+    neutrality = {
+        popularity = 40
+    }
+    democratic = {
+        popularity = 20
+    }
+    fascism = {
+        popularity = 15
+    }
+    communism = {
+        popularity = 25
+    }
+}

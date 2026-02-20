@@ -1,0 +1,4 @@
+BZU = {
+    color = rgb { 120 10 130 }
+    color_ui = rgb { 190 120 220 }
+}

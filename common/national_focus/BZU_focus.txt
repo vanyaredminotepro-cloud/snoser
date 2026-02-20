@@ -1,0 +1,120 @@
+focus_tree = {
+	id = BZU_focus
+
+	country = {
+		factor = 0
+		modifier = {
+			add = 10
+			tag = BZU
+		}
+	}
+
+	default = no
+	continuous_focus_position = { x = 50 y = 1000 }
+
+	focus = {
+		id = BZU_begin_restoration
+		icon = GFX_goal_generic_construct_civ_factory
+		x = 6
+		y = 0
+		cost = 5
+		completion_reward = {
+			add_political_power = 75
+		}
+	}
+
+	focus = {
+		id = BZU_fix_loading_screen
+		icon = GFX_goal_generic_propaganda
+		x = 6
+		y = 1
+		cost = 5
+		prerequisite = { focus = BZU_begin_restoration }
+		completion_reward = {
+			add_stability = 0.05
+		}
+	}
+
+	focus = {
+		id = BZU_expand_industry
+		icon = GFX_goal_generic_construct_mil_factory
+		x = 4
+		y = 2
+		cost = 8
+		prerequisite = { focus = BZU_fix_loading_screen }
+		completion_reward = {
+			add_building_construction = {
+				type = industrial_complex
+				level = 1
+				instant_build = yes
+			}
+		}
+	}
+
+	focus = {
+		id = BZU_army_buffs
+		icon = GFX_goal_generic_army_doctrines
+		x = 8
+		y = 2
+		cost = 8
+		prerequisite = { focus = BZU_fix_loading_screen }
+		completion_reward = {
+			army_experience = 15
+		}
+	}
+
+	focus = {
+		id = BZU_focuses_for_obosslyandiya
+		icon = GFX_goal_generic_major_war
+		x = 4
+		y = 3
+		cost = 8
+		prerequisite = { focus = BZU_expand_industry }
+		completion_reward = {
+			add_war_support = 0.05
+		}
+	}
+
+	focus = {
+		id = BZU_prepare_first_revolt
+		icon = GFX_goal_generic_demand_territory
+		x = 8
+		y = 3
+		cost = 8
+		prerequisite = { focus = BZU_army_buffs }
+		completion_reward = {
+			add_manpower = 50000
+		}
+	}
+
+	focus = {
+		id = BZU_centrism_course
+		icon = GFX_goal_support_democracy
+		x = 5
+		y = 4
+		cost = 8
+		prerequisite = {
+			focus = BZU_focuses_for_obosslyandiya
+			focus = BZU_prepare_first_revolt
+		}
+		completion_reward = {
+			add_popularity = {
+				ideology = neutrality
+				popularity = 0.1
+			}
+		}
+	}
+
+	focus = {
+		id = BZU_beta_in_one_month
+		icon = GFX_goal_generic_political_reform
+		x = 7
+		y = 5
+		cost = 10
+		prerequisite = { focus = BZU_centrism_course }
+		completion_reward = {
+			add_stability = 0.1
+			add_war_support = 0.1
+		}
+	}
+}
