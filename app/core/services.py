@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -184,7 +185,7 @@ class NewsService:
             await self.bot.send_message(
                 chat_id=config.target_channel,
                 text=formatted,
-                parse_mode="HTML",
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=False,
             )
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
@@ -195,11 +196,11 @@ class NewsService:
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
         try:
             if post.media_type == "photo" and post.media_file_id:
-                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="HTML")
+                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
             elif post.media_type == "video" and post.media_file_id:
-                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="HTML")
+                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
             elif post.media_type == "animation" and post.media_file_id:
-                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="HTML")
+                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
             else:
                 await self.publish_and_mark(post, caption, hash_value)
                 return
@@ -232,11 +233,11 @@ class NewsService:
 
         if post.has_media and post.media_file_id:
             if post.media_type == "photo":
-                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token), parse_mode="HTML")
+                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
             elif post.media_type == "video":
-                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token), parse_mode="HTML")
+                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
             elif post.media_type == "animation":
-                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token), parse_mode="HTML")
+                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
             else:
                 await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token))
         else:
@@ -258,13 +259,14 @@ class NewsService:
             )
 
     async def publish_map_digest(self, file_id: str | None, media_type: str, comment: str) -> None:
-        title = f"<blockquote><b><u>Сводка: {comment[:120]}</u></b></blockquote>"
+        escaped = re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}\.!])", r"\\\1", comment[:120])
+        title = f"> *Сводка:* _{escaped}_"
         if media_type == "photo" and file_id:
-            await self.bot.send_photo(config.target_channel, file_id, caption=title, parse_mode="HTML")
+            await self.bot.send_photo(config.target_channel, file_id, caption=title, parse_mode="MarkdownV2")
         elif media_type == "document" and file_id:
-            await self.bot.send_document(config.target_channel, file_id, caption=title, parse_mode="HTML")
+            await self.bot.send_document(config.target_channel, file_id, caption=title, parse_mode="MarkdownV2")
         else:
-            await self.bot.send_message(config.target_channel, title, parse_mode="HTML")
+            await self.bot.send_message(config.target_channel, title, parse_mode="MarkdownV2")
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))

@@ -1,4 +1,3 @@
-import html
 import re
 
 
@@ -19,6 +18,15 @@ class NewsFormatter:
         "map": ["карта", "map", "границ", "территор"],
         "important": ["срочно", "важно", "экстренно", "‼"],
     }
+
+    mdv2_special = r"_*[]()~`>#+-=|{}.!"
+
+    @classmethod
+    def _escape_mdv2(cls, text: str) -> str:
+        out = text
+        for ch in cls.mdv2_special:
+            out = out.replace(ch, f"\\{ch}")
+        return out
 
     @staticmethod
     def _cleanup_text(raw_text: str) -> str:
@@ -57,8 +65,8 @@ class NewsFormatter:
         custom_id = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
         fallback = self.paragraph_emoji_fallback[label]
         if custom_id:
-            return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
-        return fallback
+            return f"![](tg://emoji?id={custom_id})"
+        return self._escape_mdv2(fallback)
 
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
@@ -69,6 +77,10 @@ class NewsFormatter:
             return text
         cut = text[:limit].rsplit(" ", 1)[0].strip()
         return f"{cut}…"
+
+    @staticmethod
+    def _escape_tag(tag: str) -> str:
+        return tag.replace("-", "\\-")
 
     def _build_hashtags(
         self,
@@ -104,7 +116,7 @@ class NewsFormatter:
         if not tags:
             tags.append("#RP")
 
-        return " ".join(dict.fromkeys(tags))
+        return " ".join(self._escape_tag(t) for t in dict.fromkeys(tags))
 
     def format_news(
         self,
@@ -122,18 +134,18 @@ class NewsFormatter:
         for i, paragraph in enumerate(paragraphs):
             country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
             emoji = self._emoji_for_paragraph(paragraph, premium_emoji_ids)
-            safe = html.escape(paragraph_body)
+            body = self._escape_mdv2(paragraph_body)
+            title = self._escape_mdv2(country_title)
             if i == 0:
                 numbered = re.match(r"^\s*(\d+\.[^\n]+)\s*(.*)$", paragraph_body, flags=re.S)
                 if numbered:
-                    lead = html.escape(numbered.group(1).strip())
-                    rest = html.escape(numbered.group(2).strip())
-                    safe = f"<u><b>{lead}</b></u>\n<i>{rest}</i>"
-                    rendered_parts.append(f"<blockquote>{emoji} <b>{html.escape(country_title)}</b> {safe}</blockquote>")
+                    lead = self._escape_mdv2(numbered.group(1).strip())
+                    rest = self._escape_mdv2(numbered.group(2).strip())
+                    rendered_parts.append(f"> {emoji} *{title}* *__{lead}__*\n> _{rest}_")
                 else:
-                    rendered_parts.append(f"<blockquote>{emoji} <b>{html.escape(country_title)}</b> <i>{safe}</i></blockquote>")
+                    rendered_parts.append(f"> {emoji} *{title}* _{body}_")
             else:
-                rendered_parts.append(f"{emoji} <i>{safe}</i>")
+                rendered_parts.append(f"{emoji} _{body}_")
 
         hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
         return "\n\n".join(rendered_parts) + f"\n\n{hashtags}"
