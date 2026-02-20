@@ -15,7 +15,7 @@ class RPFilter:
     }
 
     war_allowed_roots = {
-        "мобилизац", "подготов", "оборон", "контрнаступ", "перегруп", "сводк", "эвакуац",
+        "мобилизац", "подготов", "оборон", "контрнаступ", "перегруп", "сводк", "эвакуац", "ультимат",
     }
 
     ooc_roots = {
@@ -35,6 +35,10 @@ class RPFilter:
 
     real_world_roots = {"росси", "украин", "нато", "сша", "евросоюз", "пути", "байден", "ww2"}
 
+    banned_alliance_tokens = {
+        "penis", "p.e.n.i.s", "п.ен.и.с", "пенис", "хуй", "еб", "нахуй", "пизд", "пидор",
+    }
+
     @staticmethod
     def _words(text: str) -> list[str]:
         return re.findall(r"[\w-]+", text.lower(), flags=re.UNICODE)
@@ -48,9 +52,17 @@ class RPFilter:
         values = [int(v) for v in re.findall(r"\b(\d{2,5})\b", text)]
         return max(values) if values else 0
 
+    @staticmethod
+    def _contains_banned_alliance_name(low: str) -> bool:
+        normalized = re.sub(r"[^a-zа-я0-9]+", "", low)
+        return any(token in low or token.replace(".", "") in normalized for token in RPFilter.banned_alliance_tokens)
+
     def check(self, text: str) -> FilterResult:
         low = text.lower()
         words = self._words(low)
+
+        if self._contains_banned_alliance_name(low):
+            return FilterResult(False, "BANNED_ALLIANCE_NAME")
 
         if any(phrase in low for phrase in self.ooc_phrases) or self._contains_root(words, self.ooc_roots):
             return FilterResult(False, "OOC_META_CONTENT")

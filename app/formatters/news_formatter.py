@@ -3,8 +3,6 @@ import re
 
 
 class NewsFormatter:
-    """Formats news with semantic premium emoji per paragraph and strict hashtag policy."""
-
     paragraph_emoji_fallback = {
         "important": "❗️",
         "economy": "📈",
@@ -32,13 +30,21 @@ class NewsFormatter:
         return text
 
     def rewrite(self, country: str, text: str) -> str:
+        if text.lower().startswith(country.lower()):
+            return text
         return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", text, flags=re.IGNORECASE)
 
     @staticmethod
-    def _split_country_and_body(country: str, text: str) -> tuple[str, str]:
-        pattern = rf"^\s*{re.escape(country)}\b[:\-\s]*"
-        body = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
-        return (country, body) if body else (country, text)
+    def _normalize(s: str) -> str:
+        return s.lower().replace("ё", "е").strip()
+
+    def _split_country_and_body(self, country: str, text: str, aliases: list[str] | None = None) -> tuple[str, str]:
+        names = [country] + (aliases or [])
+        body = text.strip()
+        for name in names:
+            n = re.escape(name)
+            body = re.sub(rf"^\s*{n}\b[:\-\s]*", "", body, flags=re.IGNORECASE)
+        return (country, body) if body else (country, text.strip())
 
     def _emoji_for_paragraph(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> str:
         low = paragraph.lower()
@@ -49,17 +55,13 @@ class NewsFormatter:
                 break
 
         custom_id = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
-        fallback = self.paragraph_emoji_fallback[label]
         if custom_id:
-            # Premium-first rendering: send only custom emoji tag.
             return f'<tg-emoji emoji-id="{custom_id}"></tg-emoji>'
-        return fallback
+        return self.paragraph_emoji_fallback[label]
 
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
-        if base:
-            return base
-        return [text.strip()] if text.strip() else []
+        return base if base else ([text.strip()] if text.strip() else [])
 
     def _compress(self, text: str, limit: int = 700) -> str:
         if len(text) <= limit:
@@ -67,34 +69,39 @@ class NewsFormatter:
         cut = text[:limit].rsplit(" ", 1)[0].strip()
         return f"{cut}…"
 
-
-    def _build_hashtags(self, source_country: str, text: str, tags_map: dict[str, list[str]]) -> str:
-        low = text.lower()
+    def _build_hashtags(
+        self,
+        source_country: str,
+        text: str,
+        tags_map: dict[str, list[str]],
+        aliases_map: dict[str, list[str]] | None = None,
+    ) -> str:
+        low = self._normalize(text)
         tags: list[str] = []
 
-        # always include source country primary tag
         if source_country in tags_map and tags_map[source_country]:
             tags.append(tags_map[source_country][0])
 
+        aliases_map = aliases_map or {}
         for country, ctags in tags_map.items():
             if country == source_country:
                 continue
-            if country.lower() in low:
+            probes = [country] + aliases_map.get(country, [])
+            if any(self._normalize(p) in low for p in probes):
                 for tag in ctags:
                     if tag not in tags:
                         tags.append(tag)
 
-        # semantic meta tags
-        if "теракт" in low:
-            tags.append("#TERROR")
+        if "теракт" in low and "#Теракт" not in tags:
+            tags.append("#Теракт")
         if any(k in low for k in ["болез", "вирус", "mks20", "mks40"]):
-            if "mks20" in low:
+            if "mks20" in low and "#MKS20" not in tags:
                 tags.append("#MKS20")
-            if "mks40" in low:
+            if "mks40" in low and "#MKS40" not in tags:
                 tags.append("#MKS40")
 
         if not tags:
-            tags.append("#RP")
+            tags.append("#РП")
 
         return " ".join(dict.fromkeys(tags))
 
@@ -104,13 +111,15 @@ class NewsFormatter:
         text: str,
         country_hashtags: dict[str, list[str]],
         premium_emoji_ids: dict[str, str] | None = None,
+        country_aliases: dict[str, list[str]] | None = None,
     ) -> str:
         cleaned = self._compress(self._cleanup_text(text))
         paragraphs = self._split_paragraphs(cleaned)
 
         rendered_parts: list[str] = []
+        aliases = (country_aliases or {}).get(country, [])
         for i, paragraph in enumerate(paragraphs):
-            country_title, paragraph_body = self._split_country_and_body(country, paragraph) if i == 0 else (country, paragraph)
+            country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
             emoji = self._emoji_for_paragraph(paragraph, premium_emoji_ids)
             safe = html.escape(paragraph_body)
             if i == 0:
@@ -125,7 +134,7 @@ class NewsFormatter:
             else:
                 rendered_parts.append(f"{emoji} <i>{safe}</i>")
 
-        hashtags = self._build_hashtags(country, cleaned, country_hashtags)
+        hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
         return "\n\n".join(rendered_parts) + f"\n\n{hashtags}"
 
 

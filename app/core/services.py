@@ -151,6 +151,7 @@ class NewsService:
             text=rewritten,
             country_hashtags=config.country_hashtags,
             premium_emoji_ids=config.premium_emoji_ids,
+            country_aliases=config.country_aliases,
         )
 
         if post.has_media:

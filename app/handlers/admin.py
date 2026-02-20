@@ -43,7 +43,7 @@ def _extract_media(message: Message) -> tuple[str | None, str | None]:
 
 
 def bind_admin_handlers(service: NewsService) -> Router:
-    @router.message(F.from_user.as_("u"))
+    @router.message(F.from_user.as_("u"), F.text, ~F.text.startswith("/"))
     async def antiflood_guard(message: Message, u) -> None:  # type: ignore[no-redef]
         if not u:
             return
@@ -54,7 +54,10 @@ def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(Command("start"))
     async def start_cmd(message: Message) -> None:
         await message.answer(
-            "Бот активен. Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list"
+            "Бот активен.\n"
+            "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list\n\n"
+            "Для /write_news обязательно укажите хештег страны (например #OBS).\n"
+            "Новость не должна нарушать RP-правила, иначе будет отклонена."
         )
 
     @router.message(Command("status"))
@@ -85,13 +88,23 @@ def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(Command("write_news"))
     async def write_news_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(WriteNewsState.waiting_text)
-        await message.answer("Отправьте текст/медиа новости. Медиа отправится на модерацию.")
+        await message.answer(
+            "Отправьте текст/медиа новости.\n"
+            "Требования:\n"
+            "1) Обязательно добавьте хештег страны (#OBS / #OB / #VL и т.д.)\n"
+            "2) Не нарушайте RP-правила\n"
+            "3) Медиа всегда уходит на модерацию"
+        )
 
     @router.message(WriteNewsState.waiting_text)
     async def write_news_flow(message: Message, state: FSMContext) -> None:
         text = (message.caption or message.text or "").strip()
         if not text and not (message.photo or message.video or message.animation):
             await message.answer("Пустой текст")
+            return
+
+        if "#" not in text:
+            await message.answer("Нужен хештег страны (пример: #OBS). Новость не принята.")
             return
 
         file_id, media_type = _extract_media(message)
