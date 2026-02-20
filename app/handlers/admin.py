@@ -64,14 +64,6 @@ def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
 
 
 def bind_admin_handlers(service: NewsService) -> Router:
-    @router.message(F.from_user.as_("u"), F.text, ~F.text.startswith("/"))
-    async def antiflood_guard(message: Message, u) -> None:  # type: ignore[no-redef]
-        if not u:
-            return
-        ok, reason = await service.check_antiflood(u.id)
-        if not ok:
-            await message.answer(reason)
-
     @router.message(Command("start"))
     async def start_cmd(message: Message) -> None:
         await message.answer(
@@ -131,8 +123,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
             return
 
         claimed_country = _detect_claimed_country(text)
+        if claimed_country == "MANUAL":
+            await message.answer("Не найден валидный хештег страны. Используйте английские теги (например #OBS, #OB, #VL).")
+            return
+
         user_id = message.from_user.id if message.from_user else 0
-        if claimed_country != "MANUAL" and not _is_author_allowed_for_country(claimed_country, user_id):
+        if not _is_author_allowed_for_country(claimed_country, user_id):
             await message.answer("Вы не можете публиковать новости от лица этой страны.")
             return
 
@@ -235,5 +231,13 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer("Отклонено")
 
         await callback.answer()
+
+    @router.message(F.from_user.as_("u"), F.text, ~F.text.startswith("/"))
+    async def antiflood_guard(message: Message, u) -> None:  # type: ignore[no-redef]
+        if not u:
+            return
+        ok, reason = await service.check_antiflood(u.id)
+        if not ok:
+            await message.answer(reason)
 
     return router

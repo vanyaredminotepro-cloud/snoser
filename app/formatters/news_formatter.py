@@ -55,9 +55,10 @@ class NewsFormatter:
                 break
 
         custom_id = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
+        fallback = self.paragraph_emoji_fallback[label]
         if custom_id:
-            return f'<tg-emoji emoji-id="{custom_id}"></tg-emoji>'
-        return self.paragraph_emoji_fallback[label]
+            return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
+        return fallback
 
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
