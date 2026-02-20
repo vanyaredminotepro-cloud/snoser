@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 from collections import deque
@@ -163,7 +162,7 @@ class NewsService:
             await self.register_war_event(translated)
 
         rewritten = self.formatter.rewrite(post.source_country, translated)
-        formatted = self.formatter.format_news(
+        formatted, entities = self.formatter.format_news_entities(
             country=post.source_country,
             text=rewritten,
             country_hashtags=config.country_hashtags,
@@ -178,14 +177,14 @@ class NewsService:
         if config.publish_delay_seconds > 0:
             await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
 
-        await self.publish_and_mark(post, formatted, hash_value)
+        await self.publish_and_mark(post, formatted, entities, hash_value)
 
-    async def publish_and_mark(self, post: IncomingPost, formatted: str, hash_value: str) -> None:
+    async def publish_and_mark(self, post: IncomingPost, formatted: str, entities: list | None, hash_value: str) -> None:
         try:
             await self.bot.send_message(
                 chat_id=config.target_channel,
                 text=formatted,
-                parse_mode="MarkdownV2",
+                entities=entities,
                 disable_web_page_preview=False,
             )
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
@@ -196,13 +195,13 @@ class NewsService:
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
         try:
             if post.media_type == "photo" and post.media_file_id:
-                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
+                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "video" and post.media_file_id:
-                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
+                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "animation" and post.media_file_id:
-                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024], parse_mode="MarkdownV2")
+                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
             else:
-                await self.publish_and_mark(post, caption, hash_value)
+                await self.publish_and_mark(post, caption, None, hash_value)
                 return
 
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
@@ -262,11 +261,11 @@ class NewsService:
         escaped = re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}\.!])", r"\\\1", comment[:120])
         title = f"> *Сводка:* _{escaped}_"
         if media_type == "photo" and file_id:
-            await self.bot.send_photo(config.target_channel, file_id, caption=title, parse_mode="MarkdownV2")
+            await self.bot.send_photo(config.target_channel, file_id, caption=title)
         elif media_type == "document" and file_id:
-            await self.bot.send_document(config.target_channel, file_id, caption=title, parse_mode="MarkdownV2")
+            await self.bot.send_document(config.target_channel, file_id, caption=title)
         else:
-            await self.bot.send_message(config.target_channel, title, parse_mode="MarkdownV2")
+            await self.bot.send_message(config.target_channel, title)
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))

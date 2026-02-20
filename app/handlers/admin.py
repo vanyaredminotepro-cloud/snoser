@@ -224,7 +224,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             if post.has_media:
                 await service.publish_media_and_mark(post, payload["formatted_text"], hash_value)
             else:
-                await service.publish_and_mark(post, payload["formatted_text"], hash_value)
+                await service.publish_and_mark(post, payload["formatted_text"], None, hash_value)
             await callback.message.answer("Одобрено и опубликовано")
         else:
             await service.db.mark_processed(post.source_channel, post.message_id, hash_value)

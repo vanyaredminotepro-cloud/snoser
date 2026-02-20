@@ -1,4 +1,5 @@
 import re
+from aiogram.types import MessageEntity
 
 
 class NewsFormatter:
@@ -19,14 +20,9 @@ class NewsFormatter:
         "important": ["срочно", "важно", "экстренно", "‼"],
     }
 
-    mdv2_special = r"_*[]()~`>#+-=|{}.!"
-
-    @classmethod
-    def _escape_mdv2(cls, text: str) -> str:
-        out = text
-        for ch in cls.mdv2_special:
-            out = out.replace(ch, f"\\{ch}")
-        return out
+    @staticmethod
+    def _utf16_len(value: str) -> int:
+        return len(value.encode("utf-16-le")) // 2
 
     @staticmethod
     def _cleanup_text(raw_text: str) -> str:
@@ -54,19 +50,20 @@ class NewsFormatter:
             body = re.sub(rf"^\s*{n}\b[:\-\s]*", "", body, flags=re.IGNORECASE)
         return (country, body) if body else (country, text.strip())
 
-    def _emoji_for_paragraph(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> str:
+    def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()
         label = "default"
         for candidate, tokens in self.emoji_rules.items():
             if any(token in low for token in tokens):
                 label = candidate
                 break
+        return label
 
+    def _emoji_char_and_id(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> tuple[str, str | None]:
+        label = self._emoji_label(paragraph)
         custom_id = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
         fallback = self.paragraph_emoji_fallback[label]
-        if custom_id:
-            return f"![](tg://emoji?id={custom_id})"
-        return self._escape_mdv2(fallback)
+        return fallback, custom_id
 
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
@@ -77,9 +74,6 @@ class NewsFormatter:
             return text
         cut = text[:limit].rsplit(" ", 1)[0].strip()
         return f"{cut}…"
-
-    def _escape_tag(self, tag: str) -> str:
-        return self._escape_mdv2(tag)
 
     def _build_hashtags(
         self,
@@ -115,7 +109,70 @@ class NewsFormatter:
         if not tags:
             tags.append("#RP")
 
-        return " ".join(self._escape_tag(t) for t in dict.fromkeys(tags))
+        return " ".join(dict.fromkeys(tags))
+
+    def format_news_entities(
+        self,
+        country: str,
+        text: str,
+        country_hashtags: dict[str, list[str]],
+        premium_emoji_ids: dict[str, str] | None = None,
+        country_aliases: dict[str, list[str]] | None = None,
+    ) -> tuple[str, list[MessageEntity]]:
+        cleaned = self._compress(self._cleanup_text(text))
+        paragraphs = self._split_paragraphs(cleaned)
+
+        entities: list[MessageEntity] = []
+        parts: list[str] = []
+        aliases = (country_aliases or {}).get(country, [])
+
+        for i, paragraph in enumerate(paragraphs):
+            emoji_char, emoji_id = self._emoji_char_and_id(paragraph, premium_emoji_ids)
+            country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
+
+            if i == 0:
+                line = f"{emoji_char} {country_title} {paragraph_body}".strip()
+            else:
+                line = f"{emoji_char} {paragraph_body}".strip()
+
+            part_start_units = self._utf16_len("\n\n".join(parts) + ("\n\n" if parts else ""))
+            line_units = self._utf16_len(line)
+
+            # custom emoji entity on first symbol
+            if emoji_id:
+                entities.append(
+                    MessageEntity(
+                        type="custom_emoji",
+                        offset=part_start_units,
+                        length=self._utf16_len(emoji_char),
+                        custom_emoji_id=emoji_id,
+                    )
+                )
+
+            if i == 0:
+                prefix = f"{emoji_char} "
+                country_start = part_start_units + self._utf16_len(prefix)
+                country_len = self._utf16_len(country_title)
+                if country_len > 0:
+                    entities.append(MessageEntity(type="bold", offset=country_start, length=country_len))
+
+                body_prefix = f"{emoji_char} {country_title} "
+                body_start = part_start_units + self._utf16_len(body_prefix)
+                body_len = line_units - self._utf16_len(body_prefix)
+                if body_len > 0:
+                    entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
+            else:
+                body_prefix = f"{emoji_char} "
+                body_start = part_start_units + self._utf16_len(body_prefix)
+                body_len = line_units - self._utf16_len(body_prefix)
+                if body_len > 0:
+                    entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
+
+            parts.append(line)
+
+        hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
+        full_text = "\n\n".join(parts) + f"\n\n{hashtags}"
+        return full_text, entities
 
     def format_news(
         self,
@@ -125,30 +182,14 @@ class NewsFormatter:
         premium_emoji_ids: dict[str, str] | None = None,
         country_aliases: dict[str, list[str]] | None = None,
     ) -> str:
-        cleaned = self._compress(self._cleanup_text(text))
-        paragraphs = self._split_paragraphs(cleaned)
-
-        rendered_parts: list[str] = []
-        aliases = (country_aliases or {}).get(country, [])
-        for i, paragraph in enumerate(paragraphs):
-            country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
-            emoji = self._emoji_for_paragraph(paragraph, premium_emoji_ids)
-            body = self._escape_mdv2(paragraph_body)
-            title = self._escape_mdv2(country_title)
-            if i == 0:
-                numbered = re.match(r"^\s*(\d+\.[^\n]+)\s*(.*)$", paragraph_body, flags=re.S)
-                if numbered:
-                    lead = self._escape_mdv2(numbered.group(1).strip())
-                    rest = self._escape_mdv2(numbered.group(2).strip())
-                    rendered_parts.append(f"> {emoji} *{title}* *__{lead}__*\n> _{rest}_")
-                else:
-                    rendered_parts.append(f"> {emoji} *{title}* _{body}_")
-            else:
-                rendered_parts.append(f"{emoji} _{body}_")
-
-        hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
-        return "\n\n".join(rendered_parts) + f"\n\n{hashtags}"
-
+        rendered, _ = self.format_news_entities(
+            country=country,
+            text=text,
+            country_hashtags=country_hashtags,
+            premium_emoji_ids=premium_emoji_ids,
+            country_aliases=country_aliases,
+        )
+        return rendered
 
 
 def format_news_text(
