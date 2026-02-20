@@ -8,7 +8,7 @@ l_russian:
  bezuslyandiya_category:0 "Проект Безусляндии"
  bezuslyandiya_category_desc:0 "Иногда история делает неожиданные повороты."
  bezuslyandiya_create_country:0 "Провозгласить Безусляндию"
- bezuslyandiya_create_country_desc:0 "Безусляндия появляется в регионе Берлин (state id = 64), если он под контролем Германии."
+ bezuslyandiya_create_country_desc:0 "Требования: игра за Германию, нет войны, Берлин (state id = 64) под контролем Германии, не завершён GER_anschluss."
 
  bezus.1.t:0 "Провозглашена Безусляндия"
  bezus.1.d:0 "На политической карте Европы появилась новая страна — Безусляндия."
