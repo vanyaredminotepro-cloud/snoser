@@ -78,9 +78,8 @@ class NewsFormatter:
         cut = text[:limit].rsplit(" ", 1)[0].strip()
         return f"{cut}…"
 
-    @staticmethod
-    def _escape_tag(tag: str) -> str:
-        return tag.replace("-", "\\-")
+    def _escape_tag(self, tag: str) -> str:
+        return self._escape_mdv2(tag)
 
     def _build_hashtags(
         self,
