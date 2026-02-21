@@ -50,6 +50,11 @@ class NewsFormatter:
             body = re.sub(rf"^\s*{n}\b[:\-\s]*", "", body, flags=re.IGNORECASE)
         return (country, body) if body else (country, text.strip())
 
+    def _mentions_country(self, text: str, country: str, aliases: list[str] | None = None) -> bool:
+        probes = [country] + (aliases or [])
+        normalized_text = self._normalize(text)
+        return any(self._normalize(p) in normalized_text for p in probes if p)
+
     def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()
         label = "default"
@@ -66,21 +71,46 @@ class NewsFormatter:
         return fallback, custom_id
 
     def _split_paragraphs(self, text: str) -> list[str]:
-        base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
+        base = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
         return base if base else ([text.strip()] if text.strip() else [])
 
-    def _compress(self, text: str, limit: int = 900) -> str:
+    def _compress(self, text: str, limit: int = 1200) -> str:
         compact = re.sub(r"\s+", " ", text).strip()
         if len(compact) <= limit:
             return compact
 
         sentence_cut = compact[:limit]
         sentence_boundary = max(sentence_cut.rfind(". "), sentence_cut.rfind("! "), sentence_cut.rfind("? "))
-        if sentence_boundary >= int(limit * 0.55):
+        if sentence_boundary >= int(limit * 0.5):
             return f"{sentence_cut[:sentence_boundary + 1].strip()}…"
 
         word_cut = sentence_cut.rsplit(" ", 1)[0].strip()
         return f"{(word_cut or sentence_cut).strip()}…"
+
+    def _smart_summary(self, text: str, limit: int = 260) -> str:
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        if len(cleaned) <= limit:
+            return cleaned
+
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+        if not sentences:
+            return self._compress(cleaned, limit)
+
+        first = sentences[0]
+        scored: list[tuple[int, str]] = []
+        for sentence in sentences[1:]:
+            score = 0
+            if re.search(r"\d", sentence):
+                score += 2
+            if any(k in sentence.lower() for k in ["погиб", "ранен", "подпис", "встрет", "бюджет", "санкц", "договор", "чс", "атака"]):
+                score += 2
+            if len(sentence) > 40:
+                score += 1
+            scored.append((score, sentence))
+
+        best = max(scored, key=lambda x: x[0])[1] if scored else ""
+        summary = first if not best else f"{first} {best}"
+        return self._compress(summary, limit)
 
     def _build_hashtags(
         self,
@@ -126,26 +156,34 @@ class NewsFormatter:
         premium_emoji_ids: dict[str, str] | None = None,
         country_aliases: dict[str, list[str]] | None = None,
     ) -> tuple[str, list[MessageEntity]]:
-        cleaned = self._compress(self._cleanup_text(text))
-        paragraphs = self._split_paragraphs(cleaned)
+        cleaned = self._cleanup_text(text)
+        concise = self._compress(cleaned)
+        paragraphs = self._split_paragraphs(concise)
 
         entities: list[MessageEntity] = []
         parts: list[str] = []
         aliases = (country_aliases or {}).get(country, [])
 
+        summary = self._smart_summary(cleaned)
+        if summary and len(cleaned) > 320:
+            summary_line = f"❝ {summary} ❞"
+            start = self._utf16_len("")
+            entities.append(MessageEntity(type="bold", offset=start, length=self._utf16_len(summary_line)))
+            entities.append(MessageEntity(type="italic", offset=start, length=self._utf16_len(summary_line)))
+            parts.append(summary_line)
+
         for i, paragraph in enumerate(paragraphs):
             emoji_char, emoji_id = self._emoji_char_and_id(paragraph, premium_emoji_ids)
             country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
 
-            if i == 0:
-                line = f"{emoji_char} {country_title} {paragraph_body}".strip()
+            if i == 0 and not self._mentions_country(paragraph, country, aliases):
+                line = f"{emoji_char} {country_title} — {paragraph_body}".strip()
             else:
                 line = f"{emoji_char} {paragraph_body}".strip()
 
             part_start_units = self._utf16_len("\n\n".join(parts) + ("\n\n" if parts else ""))
             line_units = self._utf16_len(line)
 
-            # custom emoji entity on first symbol
             if emoji_id:
                 entities.append(
                     MessageEntity(
@@ -156,24 +194,18 @@ class NewsFormatter:
                     )
                 )
 
-            if i == 0:
-                prefix = f"{emoji_char} "
-                country_start = part_start_units + self._utf16_len(prefix)
+            body_prefix = f"{emoji_char} "
+            body_start = part_start_units + self._utf16_len(body_prefix)
+            body_len = line_units - self._utf16_len(body_prefix)
+            if body_len > 0:
+                entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
+
+            if i == 0 and " — " in line:
+                country_prefix = f"{emoji_char} "
+                country_start = part_start_units + self._utf16_len(country_prefix)
                 country_len = self._utf16_len(country_title)
                 if country_len > 0:
                     entities.append(MessageEntity(type="bold", offset=country_start, length=country_len))
-
-                body_prefix = f"{emoji_char} {country_title} "
-                body_start = part_start_units + self._utf16_len(body_prefix)
-                body_len = line_units - self._utf16_len(body_prefix)
-                if body_len > 0:
-                    entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
-            else:
-                body_prefix = f"{emoji_char} "
-                body_start = part_start_units + self._utf16_len(body_prefix)
-                body_len = line_units - self._utf16_len(body_prefix)
-                if body_len > 0:
-                    entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
 
             parts.append(line)
 

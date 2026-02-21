@@ -173,7 +173,7 @@ class NewsService:
         )
 
         if post.has_media:
-            await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL")
+            await self.publish_media_and_mark(post, formatted, hash_value)
             return
 
         if config.publish_delay_seconds > 0:
@@ -206,7 +206,16 @@ class NewsService:
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
         try:
-            if post.media_type == "photo" and post.media_file_id:
+            source_chat = str(post.source_channel)
+            if source_chat and source_chat not in {"manual_admin", "scheduled"}:
+                from_chat_id = source_chat if source_chat.startswith("@") else f"@{source_chat}"
+                await self.bot.copy_message(
+                    chat_id=config.target_channel,
+                    from_chat_id=from_chat_id,
+                    message_id=post.message_id,
+                    caption=caption[:1024],
+                )
+            elif post.media_type == "photo" and post.media_file_id:
                 await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "video" and post.media_file_id:
                 await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
