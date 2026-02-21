@@ -191,8 +191,18 @@ class NewsService:
             )
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
-        except TelegramBadRequest:
-            logger.exception("Publish failed")
+        except TelegramBadRequest as err:
+            logger.warning("Publish with entities failed for %s/%s: %s", post.source_channel, post.message_id, err)
+            try:
+                await self.bot.send_message(
+                    chat_id=config.target_channel,
+                    text=formatted,
+                    disable_web_page_preview=False,
+                )
+                await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+                logger.info("Published without entities %s/%s", post.source_channel, post.message_id)
+            except TelegramBadRequest:
+                logger.exception("Publish fallback failed")
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
         try:
