@@ -25,11 +25,8 @@ country_event = {
 
     immediate = {
         set_country_flag = bezus_modern_borders_applied
-
-        # Косметически показываем СССР как Россию.
         set_cosmetic_tag = SOV_RUS
 
-        # Упрощённое приближение к современным границам РФ.
         release = UKR
         release = BLR
         release = EST
@@ -60,44 +57,47 @@ country_event = {
     immediate = {
         set_global_flag = bezus_world_setup_done
 
-        # Африка: единый макрорегион в виде одной страны (Эфиопия).
+        # Безусляндия появляется сразу в Гамбурге без решений.
+        42 = {
+            set_state_owner = BZU
+            set_state_controller = BZU
+            add_core_of = BZU
+        }
+        BZU = { set_capital = 42 }
+
+        # Отдельные страны на востоке.
+        228 = {
+            set_state_owner = LNR
+            set_state_controller = LNR
+            add_core_of = LNR
+        }
+        LNR = { set_capital = 228 }
+
+        227 = {
+            set_state_owner = OBS
+            set_state_controller = OBS
+            add_core_of = OBS
+        }
+        OBS = { set_capital = 227 }
+
+        # Африка как единое государство.
         every_state = {
             limit = { is_on_continent = africa }
-            set_state_owner = ETH
-            set_state_controller = ETH
-            add_core_of = ETH
+            set_state_owner = AFR
+            set_state_controller = AFR
+            add_core_of = AFR
         }
 
-        # Южная Америка: блок стран с целью дальнейшего объединения.
-        if = {
-            limit = { COL = { exists = yes } }
-            COL = {
-                create_faction = "Cartel Compact"
-            }
+        # Южная Америка как страна картелей.
+        every_state = {
+            limit = { is_on_continent = south_america }
+            set_state_owner = CRL
+            set_state_controller = CRL
+            add_core_of = CRL
         }
+        CRL = { set_capital = 312 }
 
-        if = {
-            limit = { COL = { exists = yes } }
-            every_country = {
-                limit = {
-                    OR = {
-                        tag = VEN
-                        tag = ECU
-                        tag = PER
-                        tag = BOL
-                        tag = PRU
-                        tag = PAR
-                        tag = URG
-                        tag = ARG
-                        tag = CHL
-                        tag = BRA
-                    }
-                    exists = yes
-                    NOT = { is_in_faction = yes }
-                }
-                add_to_faction = COL
-                set_country_flag = bezus_cartel_bloc
-            }
-        }
+        # Фиксируем новость о создании Безусляндии.
+        news_event = { id = bezus.1 days = 1 }
     }
 }

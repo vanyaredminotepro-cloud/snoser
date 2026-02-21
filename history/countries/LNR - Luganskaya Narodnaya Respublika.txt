@@ -1,0 +1,11 @@
+capital = 228
+
+set_research_slots = 1
+set_convoys = 0
+set_stability = 0.35
+set_war_support = 0.45
+
+set_politics = {
+    ruling_party = neutrality
+    elections_allowed = no
+}

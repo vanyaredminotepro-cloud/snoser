@@ -3,45 +3,16 @@ country_decisions = {
         icon = generic_political_reform
 
         visible = {
-            tag = GER
+            always = no
         }
 
         bezuslyandiya_create_country = {
             icon = generic_political_pressure
-
-            allowed = {
-                has_war = no
-                BZU = { exists = no }
-            }
-
-            available = {
-                NOT = { has_completed_focus = GER_anschluss }
-                42 = {
-                    controller = GER
-                    is_core_of = GER
-                }
-            }
-
-            cost = 75
-            days_remove = 30
-
-            complete_effect = {
-                42 = {
-                    set_state_owner = BZU
-                    set_state_controller = BZU
-                    add_core_of = BZU
-                }
-
-                BZU = {
-                    set_capital = 42
-                    set_politics = {
-                        ruling_party = neutrality
-                        elections_allowed = no
-                    }
-                }
-
-                news_event = { id = bezus.1 days = 1 }
-            }
+            allowed = { always = no }
+            available = { always = no }
+            cost = 999
+            days_remove = 1
+            complete_effect = { }
         }
     }
 }

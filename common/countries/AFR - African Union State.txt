@@ -1,0 +1,11 @@
+graphical_culture = african_gfx
+graphical_culture_2d = african_2d
+
+color = { 200 120 20 }
+
+party = {
+    neutrality = { popularity = 55 }
+    democratic = { popularity = 20 }
+    communism = { popularity = 10 }
+    fascism = { popularity = 15 }
+}

@@ -1,0 +1,11 @@
+graphical_culture = southamerican_gfx
+graphical_culture_2d = southamerican_2d
+
+color = { 20 120 20 }
+
+party = {
+    neutrality = { popularity = 50 }
+    democratic = { popularity = 10 }
+    communism = { popularity = 10 }
+    fascism = { popularity = 30 }
+}
