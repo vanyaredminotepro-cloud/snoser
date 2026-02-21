@@ -29,7 +29,7 @@ country_event = {
         # Косметически показываем СССР как Россию.
         set_cosmetic_tag = SOV_RUS
 
-        # Приближаем границы к современным через освобождение республик СССР.
+        # Упрощённое приближение к современным границам РФ.
         release = UKR
         release = BLR
         release = EST
@@ -44,5 +44,60 @@ country_event = {
         release = TMS
         release = TAJ
         release = KYR
+    }
+}
+
+country_event = {
+    id = bezus.200
+    is_triggered_only = yes
+    hidden = yes
+
+    trigger = {
+        tag = GER
+        NOT = { has_global_flag = bezus_world_setup_done }
+    }
+
+    immediate = {
+        set_global_flag = bezus_world_setup_done
+
+        # Африка: единый макрорегион в виде одной страны (Эфиопия).
+        every_state = {
+            limit = { is_on_continent = africa }
+            set_state_owner = ETH
+            set_state_controller = ETH
+            add_core_of = ETH
+        }
+
+        # Южная Америка: блок стран с целью дальнейшего объединения.
+        if = {
+            limit = { COL = { exists = yes } }
+            COL = {
+                create_faction = "Cartel Compact"
+            }
+        }
+
+        if = {
+            limit = { COL = { exists = yes } }
+            every_country = {
+                limit = {
+                    OR = {
+                        tag = VEN
+                        tag = ECU
+                        tag = PER
+                        tag = BOL
+                        tag = PRU
+                        tag = PAR
+                        tag = URG
+                        tag = ARG
+                        tag = CHL
+                        tag = BRA
+                    }
+                    exists = yes
+                    NOT = { is_in_faction = yes }
+                }
+                add_to_faction = COL
+                set_country_flag = bezus_cartel_bloc
+            }
+        }
     }
 }

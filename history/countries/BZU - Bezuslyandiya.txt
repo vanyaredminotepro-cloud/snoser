@@ -1,13 +1,17 @@
+capital = 42
+
 set_research_slots = 2
 set_convoys = 5
 set_stability = 0.55
 set_war_support = 0.35
+
 set_politics = {
     ruling_party = neutrality
     elections_allowed = no
     last_election = "1936.1.1"
     election_frequency = 48
 }
+
 create_country_leader = {
     name = "Алексей Безус"
     desc = "POLITICS_ALEKSEY_BEZUS_DESC"
