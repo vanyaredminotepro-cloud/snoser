@@ -42,18 +42,12 @@ class NewsFormatter:
     def _normalize(s: str) -> str:
         return s.lower().replace("ё", "е").strip()
 
-    def _split_country_and_body(self, country: str, text: str, aliases: list[str] | None = None) -> tuple[str, str]:
-        names = [country] + (aliases or [])
-        body = text.strip()
-        for name in names:
-            n = re.escape(name)
-            body = re.sub(rf"^\s*{n}\b[:\-\s]*", "", body, flags=re.IGNORECASE)
-        return (country, body) if body else (country, text.strip())
 
-    def _mentions_country(self, text: str, country: str, aliases: list[str] | None = None) -> bool:
+
+    def _starts_with_country(self, text: str, country: str, aliases: list[str] | None = None) -> bool:
+        probe_text = self._normalize(text)
         probes = [country] + (aliases or [])
-        normalized_text = self._normalize(text)
-        return any(self._normalize(p) in normalized_text for p in probes if p)
+        return any(probe_text.startswith(self._normalize(name)) for name in probes if name)
 
     def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()
@@ -162,24 +156,24 @@ class NewsFormatter:
 
         entities: list[MessageEntity] = []
         parts: list[str] = []
-        aliases = (country_aliases or {}).get(country, [])
-
         summary = self._smart_summary(cleaned)
         if summary and len(cleaned) > 320:
             summary_line = f"❝ {summary} ❞"
             start = self._utf16_len("")
+            entities.append(MessageEntity(type="blockquote", offset=start, length=self._utf16_len(summary_line)))
             entities.append(MessageEntity(type="bold", offset=start, length=self._utf16_len(summary_line)))
             entities.append(MessageEntity(type="italic", offset=start, length=self._utf16_len(summary_line)))
             parts.append(summary_line)
 
+        aliases = (country_aliases or {}).get(country, [])
+
         for i, paragraph in enumerate(paragraphs):
             emoji_char, emoji_id = self._emoji_char_and_id(paragraph, premium_emoji_ids)
-            country_title, paragraph_body = self._split_country_and_body(country, paragraph, aliases if i == 0 else None)
 
-            if i == 0 and not self._mentions_country(paragraph, country, aliases):
-                line = f"{emoji_char} {country_title} — {paragraph_body}".strip()
+            if i == 0 and not self._starts_with_country(paragraph, country, aliases):
+                line = f"{emoji_char} {country} — {paragraph}".strip()
             else:
-                line = f"{emoji_char} {paragraph_body}".strip()
+                line = f"{emoji_char} {paragraph}".strip()
 
             part_start_units = self._utf16_len("\n\n".join(parts) + ("\n\n" if parts else ""))
             line_units = self._utf16_len(line)
@@ -200,10 +194,10 @@ class NewsFormatter:
             if body_len > 0:
                 entities.append(MessageEntity(type="italic", offset=body_start, length=body_len))
 
-            if i == 0 and " — " in line:
+            if i == 0:
                 country_prefix = f"{emoji_char} "
                 country_start = part_start_units + self._utf16_len(country_prefix)
-                country_len = self._utf16_len(country_title)
+                country_len = self._utf16_len(country)
                 if country_len > 0:
                     entities.append(MessageEntity(type="bold", offset=country_start, length=country_len))
 
