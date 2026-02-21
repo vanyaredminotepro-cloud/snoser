@@ -100,6 +100,7 @@ class NewsService:
                     seen_key = f"rss_seen:{key}"
                     seen = await self.db.get_state(seen_key, "")
                     items = await self.rss.fetch(key, url)
+                    latest_marker = seen
                     for item in reversed(items):
                         marker = content_hash(f"{item.title}|{item.link}")
                         if marker == seen:
@@ -114,8 +115,9 @@ class NewsService:
                                 has_media=False,
                             )
                         )
-                        await self.db.set_state(seen_key, marker)
-                        break
+                        latest_marker = marker
+                    if latest_marker != seen:
+                        await self.db.set_state(seen_key, latest_marker)
             except Exception:
                 logger.exception("RSS worker failed")
             await asyncio.sleep(max(10, config.rss_poll_seconds))

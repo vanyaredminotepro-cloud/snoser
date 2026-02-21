@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 if __package__ is None or __package__ == "":
@@ -27,6 +28,47 @@ class AppRuntime:
         self.bot = Bot(token=config.bot_token)
         self.dispatcher = Dispatcher()
         self.userbot = TelegramClient(config.session_name, config.api_id, config.api_hash)
+
+    async def _scan_missing_posts(self, service: NewsService, source_by_username: dict[str, str]) -> None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, config.history_scan_max_age_days))
+        for username, country in source_by_username.items():
+            try:
+                entity = await self.userbot.get_entity(username)
+                source_name = str(getattr(entity, "username", None) or getattr(entity, "title", username))
+                missing_count = 0
+                async for msg in self.userbot.iter_messages(entity, limit=max(1, config.history_scan_limit)):
+                    msg_dt = msg.date if msg.date.tzinfo else msg.date.replace(tzinfo=timezone.utc)
+                    if msg_dt < cutoff:
+                        break
+                    text = _extract_text(msg)
+                    if not text and not msg.media:
+                        continue
+                    if await service.db.has_processed_message(source_name, int(msg.id)):
+                        continue
+                    await service.enqueue(
+                        IncomingPost(
+                            source_country=country,
+                            source_channel=source_name,
+                            message_id=int(msg.id),
+                            text=text,
+                            has_media=bool(msg.media),
+                            media_file_id=None,
+                            media_type=None,
+                        )
+                    )
+                    missing_count += 1
+                if missing_count:
+                    logger.info("Backfill queued %s missing posts for %s (<= %s days)", missing_count, source_name, config.history_scan_max_age_days)
+            except Exception:
+                logger.exception("History scan failed for source %s", username)
+
+    async def history_worker(self, service: NewsService, source_by_username: dict[str, str]) -> None:
+        while True:
+            try:
+                await self._scan_missing_posts(service, source_by_username)
+            except Exception:
+                logger.exception("History worker failed")
+            await asyncio.sleep(max(30, config.history_scan_interval_seconds))
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
@@ -73,6 +115,7 @@ class AppRuntime:
             )
             await service.enqueue(post)
 
+        history_task: asyncio.Task | None = None
         try:
             logger.info("Starting userbot connection...")
             await self.userbot.connect()
@@ -91,6 +134,7 @@ class AppRuntime:
                 logger.error("Telethon session is still not authorized after login attempt.")
                 return
 
+            history_task = asyncio.create_task(self.history_worker(service, source_by_username))
             logger.info("Userbot authorized and connected")
             await asyncio.gather(
                 self.dispatcher.start_polling(self.bot),
@@ -100,6 +144,8 @@ class AppRuntime:
             worker_task.cancel()
             scheduler_task.cancel()
             rss_task.cancel()
+            if history_task:
+                history_task.cancel()
             await service.cleanup_runtime_files()
             await self.bot.session.close()
             await self.userbot.disconnect()

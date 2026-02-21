@@ -69,11 +69,18 @@ class NewsFormatter:
         base = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
         return base if base else ([text.strip()] if text.strip() else [])
 
-    def _compress(self, text: str, limit: int = 700) -> str:
-        if len(text) <= limit:
-            return text
-        cut = text[:limit].rsplit(" ", 1)[0].strip()
-        return f"{cut}…"
+    def _compress(self, text: str, limit: int = 900) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if len(compact) <= limit:
+            return compact
+
+        sentence_cut = compact[:limit]
+        sentence_boundary = max(sentence_cut.rfind(". "), sentence_cut.rfind("! "), sentence_cut.rfind("? "))
+        if sentence_boundary >= int(limit * 0.55):
+            return f"{sentence_cut[:sentence_boundary + 1].strip()}…"
+
+        word_cut = sentence_cut.rsplit(" ", 1)[0].strip()
+        return f"{(word_cut or sentence_cut).strip()}…"
 
     def _build_hashtags(
         self,

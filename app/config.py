@@ -22,6 +22,9 @@ class Config:
     antiflood_max_messages: int = 5
     scheduler_poll_seconds: int = 5
     rss_poll_seconds: int = 45
+    history_scan_interval_seconds: int = 120
+    history_scan_limit: int = 40
+    history_scan_max_age_days: int = 14
     war_digest_threshold: int = 4
     map_request_cooldown_minutes: int = 30
 
