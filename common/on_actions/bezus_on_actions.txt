@@ -1,0 +1,15 @@
+on_actions = {
+    on_startup = {
+        effect = {
+            every_country = {
+                limit = { tag = SOV }
+                country_event = { id = bezus.100 days = 1 }
+            }
+
+            every_country = {
+                limit = { tag = GER }
+                country_event = { id = bezus.200 days = 1 }
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-l_russian:
+﻿l_russian:
  BZU:0 "Безусляндия"
  BZU_DEF:0 "Безусляндия"
  BZU_ADJ:0 "безусляндск"
@@ -6,9 +6,9 @@ l_russian:
  POLITICS_ALEKSEY_BEZUS_DESC:0 "Лидер-организатор, восстановивший мод после технического хаоса."
 
  bezuslyandiya_category:0 "Проект Безусляндии"
- bezuslyandiya_category_desc:0 "Иногда история делает неожиданные повороты."
+ bezuslyandiya_category_desc:0 "Страна появляется автоматически на старте и не требует решений."
  bezuslyandiya_create_country:0 "Провозгласить Безусляндию"
- bezuslyandiya_create_country_desc:0 "Требования: игра за Германию, нет войны, Берлин (state id = 64) под контролем Германии, не завершён GER_anschluss."
+ bezuslyandiya_create_country_desc:0 "Сейчас не используется: Безусляндия создаётся автоматически в начале новой кампании."
 
  bezus.1.t:0 "Провозглашена Безусляндия"
  bezus.1.d:0 "На политической карте Европы появилась новая страна — Безусляндия."
@@ -31,3 +31,23 @@ l_russian:
  BZU_centrism_course_desc:0 "Закрепляем умеренный политический курс."
  BZU_beta_in_one_month:0 "Бета через месяц"
  BZU_beta_in_one_month_desc:0 "Доводим контент и выходим на первую бета-версию."
+
+ SOV_RUS:0 "Россия"
+ SOV_RUS_DEF:0 "Россия"
+ SOV_RUS_ADJ:0 "российск"
+
+ OBS:0 "Обоссляндия"
+ OBS_DEF:0 "Обоссляндия"
+ OBS_ADJ:0 "обоссляндск"
+
+ CRL:0 "Картели"
+ CRL_DEF:0 "Картели"
+ CRL_ADJ:0 "картельн"
+
+ LNR:0 "ЛНР"
+ LNR_DEF:0 "ЛНР"
+ LNR_ADJ:0 "лнр"
+
+ AFR:0 "Союз Африки"
+ AFR_DEF:0 "Союз Африки"
+ AFR_ADJ:0 "африканск"

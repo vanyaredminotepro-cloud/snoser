@@ -1,1 +1,5 @@
 BZU = "countries/BZU - Bezuslyandiya.txt"
+OBS = "countries/OBS - Obosslyandiya.txt"
+CRL = "countries/CRL - Cartels.txt"
+LNR = "countries/LNR - Luganskaya Narodnaya Respublika.txt"
+AFR = "countries/AFR - African Union State.txt"

@@ -12,3 +12,92 @@ news_event = {
         name = bezus.1.a
     }
 }
+
+country_event = {
+    id = bezus.100
+    is_triggered_only = yes
+    hidden = yes
+
+    trigger = {
+        tag = SOV
+        NOT = { has_country_flag = bezus_modern_borders_applied }
+    }
+
+    immediate = {
+        set_country_flag = bezus_modern_borders_applied
+        set_cosmetic_tag = SOV_RUS
+
+        release = UKR
+        release = BLR
+        release = EST
+        release = LAT
+        release = LIT
+        release = MOL
+        release = GEO
+        release = ARM
+        release = AZR
+        release = KAZ
+        release = UZB
+        release = TMS
+        release = TAJ
+        release = KYR
+    }
+}
+
+country_event = {
+    id = bezus.200
+    is_triggered_only = yes
+    hidden = yes
+
+    trigger = {
+        tag = GER
+        NOT = { has_global_flag = bezus_world_setup_done }
+    }
+
+    immediate = {
+        set_global_flag = bezus_world_setup_done
+
+        # Безусляндия появляется сразу в Гамбурге без решений.
+        42 = {
+            set_state_owner = BZU
+            set_state_controller = BZU
+            add_core_of = BZU
+        }
+        BZU = { set_capital = 42 }
+
+        # Отдельные страны на востоке.
+        228 = {
+            set_state_owner = LNR
+            set_state_controller = LNR
+            add_core_of = LNR
+        }
+        LNR = { set_capital = 228 }
+
+        227 = {
+            set_state_owner = OBS
+            set_state_controller = OBS
+            add_core_of = OBS
+        }
+        OBS = { set_capital = 227 }
+
+        # Африка как единое государство.
+        every_state = {
+            limit = { is_on_continent = africa }
+            set_state_owner = AFR
+            set_state_controller = AFR
+            add_core_of = AFR
+        }
+
+        # Южная Америка как страна картелей.
+        every_state = {
+            limit = { is_on_continent = south_america }
+            set_state_owner = CRL
+            set_state_controller = CRL
+            add_core_of = CRL
+        }
+        CRL = { set_capital = 312 }
+
+        # Фиксируем новость о создании Безусляндии.
+        news_event = { id = bezus.1 days = 1 }
+    }
+}
