@@ -1,4 +1,4 @@
-l_russian:
+﻿l_russian:
  BZU:0 "Безусляндия"
  BZU_DEF:0 "Безусляндия"
  BZU_ADJ:0 "безусляндск"
@@ -31,3 +31,7 @@ l_russian:
  BZU_centrism_course_desc:0 "Закрепляем умеренный политический курс."
  BZU_beta_in_one_month:0 "Бета через месяц"
  BZU_beta_in_one_month_desc:0 "Доводим контент и выходим на первую бета-версию."
+
+ SOV_RUS:0 "Россия"
+ SOV_RUS_DEF:0 "Россия"
+ SOV_RUS_ADJ:0 "российск"

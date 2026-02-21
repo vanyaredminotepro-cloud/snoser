@@ -12,3 +12,37 @@ news_event = {
         name = bezus.1.a
     }
 }
+
+country_event = {
+    id = bezus.100
+    is_triggered_only = yes
+    hidden = yes
+
+    trigger = {
+        tag = SOV
+        NOT = { has_country_flag = bezus_modern_borders_applied }
+    }
+
+    immediate = {
+        set_country_flag = bezus_modern_borders_applied
+
+        # Косметически показываем СССР как Россию.
+        set_cosmetic_tag = SOV_RUS
+
+        # Приближаем границы к современным через освобождение республик СССР.
+        release = UKR
+        release = BLR
+        release = EST
+        release = LAT
+        release = LIT
+        release = MOL
+        release = GEO
+        release = ARM
+        release = AZR
+        release = KAZ
+        release = UZB
+        release = TMS
+        release = TAJ
+        release = KYR
+    }
+}
