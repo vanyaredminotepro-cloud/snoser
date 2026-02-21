@@ -54,6 +54,7 @@ class AppRuntime:
                             has_media=bool(msg.media),
                             media_file_id=None,
                             media_type=None,
+                            source_chat_id=getattr(entity, "id", None),
                         )
                     )
                     missing_count += 1
@@ -112,6 +113,7 @@ class AppRuntime:
                 has_media=bool(event.message.media),
                 media_file_id=None,
                 media_type=None,
+                source_chat_id=getattr(channel, "id", None),
             )
             await service.enqueue(post)
 

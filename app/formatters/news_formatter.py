@@ -64,6 +64,23 @@ class NewsFormatter:
         fallback = self.paragraph_emoji_fallback[label]
         return fallback, custom_id
 
+    @staticmethod
+    def _remove_water(text: str) -> str:
+        patterns = [
+            r"(?i)\bкак известно\b",
+            r"(?i)\bследует отметить\b",
+            r"(?i)\bпо предварительным данным\b",
+            r"(?i)\bв рамках\b",
+            r"(?i)\bв свою очередь\b",
+            r"(?i)\bна данный момент\b",
+            r"(?i)\bсудя по всему\b",
+        ]
+        compact = text
+        for ptn in patterns:
+            compact = re.sub(ptn, "", compact)
+        compact = re.sub(r"\s{2,}", " ", compact)
+        return compact.strip(" ,")
+
     def _split_paragraphs(self, text: str) -> list[str]:
         base = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
         return base if base else ([text.strip()] if text.strip() else [])
@@ -82,7 +99,7 @@ class NewsFormatter:
         return f"{(word_cut or sentence_cut).strip()}…"
 
     def _smart_summary(self, text: str, limit: int = 260) -> str:
-        cleaned = re.sub(r"\s+", " ", text).strip()
+        cleaned = self._remove_water(re.sub(r"\s+", " ", text).strip())
         if len(cleaned) <= limit:
             return cleaned
 
@@ -150,7 +167,7 @@ class NewsFormatter:
         premium_emoji_ids: dict[str, str] | None = None,
         country_aliases: dict[str, list[str]] | None = None,
     ) -> tuple[str, list[MessageEntity]]:
-        cleaned = self._cleanup_text(text)
+        cleaned = self._remove_water(self._cleanup_text(text))
         concise = self._compress(cleaned)
         paragraphs = self._split_paragraphs(concise)
 
@@ -160,7 +177,6 @@ class NewsFormatter:
         if summary and len(cleaned) > 320:
             summary_line = f"❝ {summary} ❞"
             start = self._utf16_len("")
-            entities.append(MessageEntity(type="blockquote", offset=start, length=self._utf16_len(summary_line)))
             entities.append(MessageEntity(type="bold", offset=start, length=self._utf16_len(summary_line)))
             entities.append(MessageEntity(type="italic", offset=start, length=self._utf16_len(summary_line)))
             parts.append(summary_line)
@@ -203,8 +219,12 @@ class NewsFormatter:
 
             parts.append(line)
 
+        body_text = "\n\n".join(parts)
+        if parts:
+            entities.append(MessageEntity(type="blockquote", offset=0, length=self._utf16_len(parts[0])))
+
         hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
-        full_text = "\n\n".join(parts) + f"\n\n{hashtags}"
+        full_text = body_text + f"\n\n{hashtags}"
         return full_text, entities
 
     def format_news(

@@ -205,17 +205,40 @@ class NewsService:
                 logger.exception("Publish fallback failed")
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
-        try:
-            source_chat = str(post.source_channel)
-            if source_chat and source_chat not in {"manual_admin", "scheduled"}:
-                from_chat_id = source_chat if source_chat.startswith("@") else f"@{source_chat}"
+        copied = False
+        source_candidates: list[int | str] = []
+        if post.source_chat_id is not None:
+            source_candidates.append(post.source_chat_id)
+        source_chat = str(post.source_channel)
+        if source_chat and source_chat not in {"manual_admin", "scheduled"}:
+            source_candidates.append(source_chat if source_chat.startswith("@") else f"@{source_chat}")
+
+        for from_chat_id in source_candidates:
+            try:
                 await self.bot.copy_message(
                     chat_id=config.target_channel,
                     from_chat_id=from_chat_id,
                     message_id=post.message_id,
                     caption=caption[:1024],
                 )
-            elif post.media_type == "photo" and post.media_file_id:
+                copied = True
+                break
+            except TelegramBadRequest as err:
+                logger.warning(
+                    "copy_message failed for %s/%s from %s: %s",
+                    post.source_channel,
+                    post.message_id,
+                    from_chat_id,
+                    err,
+                )
+
+        try:
+            if copied:
+                await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+                logger.info("Published media %s/%s", post.source_channel, post.message_id)
+                return
+
+            if post.media_type == "photo" and post.media_file_id:
                 await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "video" and post.media_file_id:
                 await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
@@ -226,9 +249,10 @@ class NewsService:
                 return
 
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
-            logger.info("Published media %s/%s", post.source_channel, post.message_id)
+            logger.info("Published media fallback %s/%s", post.source_channel, post.message_id)
         except TelegramBadRequest:
             logger.exception("Media publish failed")
+            await self.publish_and_mark(post, caption, None, hash_value)
 
     async def send_to_moderation(self, post: IncomingPost, text: str, reason: str) -> None:
         token = uuid.uuid4().hex
