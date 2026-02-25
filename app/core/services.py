@@ -100,6 +100,7 @@ class NewsService:
                     seen_key = f"rss_seen:{key}"
                     seen = await self.db.get_state(seen_key, "")
                     items = await self.rss.fetch(key, url)
+                    latest_marker = seen
                     for item in reversed(items):
                         marker = content_hash(f"{item.title}|{item.link}")
                         if marker == seen:
@@ -114,8 +115,9 @@ class NewsService:
                                 has_media=False,
                             )
                         )
-                        await self.db.set_state(seen_key, marker)
-                        break
+                        latest_marker = marker
+                    if latest_marker != seen:
+                        await self.db.set_state(seen_key, latest_marker)
             except Exception:
                 logger.exception("RSS worker failed")
             await asyncio.sleep(max(10, config.rss_poll_seconds))
@@ -171,7 +173,7 @@ class NewsService:
         )
 
         if post.has_media:
-            await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL")
+            await self.publish_media_and_mark(post, formatted, hash_value)
             return
 
         if config.publish_delay_seconds > 0:
@@ -189,11 +191,53 @@ class NewsService:
             )
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
-        except TelegramBadRequest:
-            logger.exception("Publish failed")
+        except TelegramBadRequest as err:
+            logger.warning("Publish with entities failed for %s/%s: %s", post.source_channel, post.message_id, err)
+            try:
+                await self.bot.send_message(
+                    chat_id=config.target_channel,
+                    text=formatted,
+                    disable_web_page_preview=False,
+                )
+                await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+                logger.info("Published without entities %s/%s", post.source_channel, post.message_id)
+            except TelegramBadRequest:
+                logger.exception("Publish fallback failed")
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
+        copied = False
+        source_candidates: list[int | str] = []
+        if post.source_chat_id is not None:
+            source_candidates.append(post.source_chat_id)
+        source_chat = str(post.source_channel)
+        if source_chat and source_chat not in {"manual_admin", "scheduled"}:
+            source_candidates.append(source_chat if source_chat.startswith("@") else f"@{source_chat}")
+
+        for from_chat_id in source_candidates:
+            try:
+                await self.bot.copy_message(
+                    chat_id=config.target_channel,
+                    from_chat_id=from_chat_id,
+                    message_id=post.message_id,
+                    caption=caption[:1024],
+                )
+                copied = True
+                break
+            except TelegramBadRequest as err:
+                logger.warning(
+                    "copy_message failed for %s/%s from %s: %s",
+                    post.source_channel,
+                    post.message_id,
+                    from_chat_id,
+                    err,
+                )
+
         try:
+            if copied:
+                await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+                logger.info("Published media %s/%s", post.source_channel, post.message_id)
+                return
+
             if post.media_type == "photo" and post.media_file_id:
                 await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "video" and post.media_file_id:
@@ -205,9 +249,10 @@ class NewsService:
                 return
 
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
-            logger.info("Published media %s/%s", post.source_channel, post.message_id)
+            logger.info("Published media fallback %s/%s", post.source_channel, post.message_id)
         except TelegramBadRequest:
             logger.exception("Media publish failed")
+            await self.publish_and_mark(post, caption, None, hash_value)
 
     async def send_to_moderation(self, post: IncomingPost, text: str, reason: str) -> None:
         token = uuid.uuid4().hex

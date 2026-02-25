@@ -72,6 +72,15 @@ class Database:
             )
             await db.commit()
 
+    async def has_processed_message(self, source_chat: str, message_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM processed_posts WHERE source_chat = ? AND message_id = ?",
+                (source_chat, message_id),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
     async def set_state(self, key: str, value: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(

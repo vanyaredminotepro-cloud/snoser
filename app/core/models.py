@@ -10,3 +10,4 @@ class IncomingPost:
     has_media: bool
     media_file_id: str | None = None
     media_type: str | None = None
+    source_chat_id: int | str | None = None
