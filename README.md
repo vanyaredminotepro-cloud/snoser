@@ -162,3 +162,24 @@ python -m app.main
 `DEFAULT`, `IMPORTANT`, `ECONOMY`, `DIPLOMACY`, `WARNING`, `MAP`.
 
 Можно прислать больше ID — просто добавим в `premium_emoji_ids`.
+
+---
+
+## ddlk-banda secure messenger API (MVP)
+
+В репозитории добавлен отдельный backend-модуль `ddlk_banda` на FastAPI + SQLAlchemy (SQLite по умолчанию):
+
+- zero-knowledge модель хранения (сервер хранит только ciphertext/nonce);
+- чаты: direct/group/supergroup/channel;
+- forum topics для supergroup (`is_forum` + `topic_id` в сообщениях);
+- реакции (включая `custom_emoji_id`);
+- sync c `server_seq` для offline/optimistic UI;
+- signaling API для WebRTC звонков;
+- security-модуль с X25519 и упрощенным ratchet-состоянием.
+
+Запуск:
+
+```bash
+pip install -r requirements.txt
+uvicorn ddlk_banda.main:app --host 0.0.0.0 --port 8000
+```
