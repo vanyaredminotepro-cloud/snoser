@@ -111,9 +111,8 @@ class Config:
 
     emoji_packs: dict[str, str] = field(
         default_factory=lambda: {
-            "flaerium": "https://t.me/addemoji/Flaerium",
-            "premium_flowers": "https://t.me/addemoji/FlowersPremium",
-            "animals": "https://t.me/addemoji/PremiumAnimals",
+            # По умолчанию используем только подтверждённый пак.
+            "news_emoji": "https://t.me/addemoji/NewsEmoji",
         }
     )
 

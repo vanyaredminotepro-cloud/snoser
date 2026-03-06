@@ -219,3 +219,4 @@ The IDs are configured in `app/config.py` under `premium_emoji_ids`.
 - `emoji_packs` в `app/config.py` (ссылки `https://t.me/addemoji/...`),
 - команду `/emoji_reload` (перезагрузка и кэш в `app/storage/emojis.json`),
 - команду `/emoji_list` (просмотр первых ID из кэша).
+- По умолчанию подключён только `NewsEmoji`; если у вас другие паки, добавьте их ссылки в `config.emoji_packs` и выполните `/emoji_reload`.
