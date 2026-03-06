@@ -1,11 +1,11 @@
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 
-def _load_dotenv_if_present(path: Path = Path(".env")) -> None:
-    if not path.exists():
+def _load_dotenv_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
         return
 
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -18,6 +18,19 @@ def _load_dotenv_if_present(path: Path = Path(".env")) -> None:
         if key and key not in os.environ:
             os.environ[key] = value
 
+
+def _load_dotenv_if_present(paths: Optional[Iterable[Path]] = None) -> None:
+    candidates = list(paths or [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ])
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        _load_dotenv_file(resolved)
 
 def _first_present_env(*names: str) -> Optional[str]:
     for name in names:

@@ -22,9 +22,14 @@ async def main() -> None:
     db = Database(str(config.sqlite_path))
     await db.init()
 
-    runtime = AppRuntime()
-    service = NewsService(runtime.bot, db)
+    try:
+        runtime = AppRuntime()
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        logger.error("Configure environment variables (or .env) and restart the bot.")
+        return
 
+    service = NewsService(runtime.bot, db)
     await runtime.run(service)
 
 
