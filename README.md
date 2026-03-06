@@ -6,7 +6,7 @@ Production-ready асинхронный Telegram-агрегатор RP-ново�
 
 - Гибридная архитектура:
   - **Userbot (Telethon)** слушает источники мгновенно.
-  - **Bot (aiogram)** публикует в канал и принимает команды.
+  - **Userbot (Telethon)** публикует в канал от вашего аккаунта.
 - Почти мгновенная реакция на новые посты (очередь + async worker).
 - Строгая фильтрация RP-контента (deny by default).
 - Блокировка военного/OOC/meta/real-world контента.
@@ -20,7 +20,7 @@ Production-ready асинхронный Telegram-агрегатор RP-ново�
 - Медиа-посты не публикуются автоматически, отправляются админу на модерацию с кнопками.
 
 - Источники с `+invite` (без публичного username) нельзя стабильно подписать через `events.NewMessage(chats=...)`; бот их пропускает и логирует предупреждение. Для таких источников лучше указать публичный username или numeric ID после вступления в чат.
-- Команды `/start /status /pause /resume /write_news`.
+- Команды `/start /status /pause /resume /write_news /emoji_reload /emoji_list`.
 - Логирование в:
   - console
   - `logs/bot.log`
@@ -125,7 +125,7 @@ python -m app.main
 > При первом запуске в терминале введите телефон и код Telegram для создания `.session`.
 
 
-## Telegram Premium emoji (custom emoji) guide
+## Telegram Premium emoji (custom emoji) guide (Telethon entities)
 
 Сейчас бот использует стандартные emoji-символы. Чтобы отправлять именно Telegram Premium custom emoji, нужно:
 
@@ -177,3 +177,12 @@ python -m app.main
 Bot publishes premium emoji through HTML tags:
 `<tg-emoji emoji-id="..."></tg-emoji>`
 The IDs are configured in `app/config.py` under `premium_emoji_ids`.
+
+
+### Entity-based custom emoji
+Публикация в канал идёт через Telethon `send_message(..., formatting_entities=...)` и `MessageEntityCustomEmoji`, без Markdown/HTML тегов.
+
+Для загрузки паков как "стикеров" используйте:
+- `emoji_packs` в `app/config.py` (ссылки `https://t.me/addemoji/...`),
+- команду `/emoji_reload` (перезагрузка и кэш в `app/storage/emojis.json`),
+- команду `/emoji_list` (просмотр первых ID из кэша).

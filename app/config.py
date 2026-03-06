@@ -17,6 +17,7 @@ class Config:
     session_name: str = "news_userbot"
     sqlite_path: Path = Path("app/storage/bot_data.sqlite3")
     logs_dir: Path = Path("logs")
+    emoji_storage_path: Path = Path("app/storage/emojis.json")
 
     antiflood_window_sec: int = 20
     antiflood_max_messages: int = 5
@@ -55,6 +56,15 @@ class Config:
             "DIPLOMACY": "5467538555158943525",    # 💭
             "WARNING": "5447644880824181073",      # ⚠️
             "MAP": "5447410659077661506",          # 🌐
+        }
+    )
+
+
+    emoji_packs: dict[str, str] = field(
+        default_factory=lambda: {
+            "flaerium": "https://t.me/addemoji/Flaerium",
+            "premium_flowers": "https://t.me/addemoji/FlowersPremium",
+            "animals": "https://t.me/addemoji/PremiumAnimals",
         }
     )
 

@@ -8,6 +8,8 @@ from pathlib import Path
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
+from telethon import TelegramClient
+from telethon.errors import RPCError
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -15,6 +17,7 @@ from app.filters.ai_guard import AIGuard
 from app.filters.rp_filter import RPFilter
 from app.formatters.news_formatter import NewsFormatter
 from app.moderation.keyboards import moderation_keyboard
+from app.parsers.emoji_packs import EmojiPackLoader
 from app.parsers.rss_parser import RSSParser
 from app.parsers.translator import AutoTranslator
 from app.storage.database import Database
@@ -27,13 +30,43 @@ class NewsService:
     def __init__(self, bot: Bot, db: Database):
         self.bot = bot
         self.db = db
+        self.user_client: TelegramClient | None = None
         self.rp_filter = RPFilter()
         self.ai_guard = AIGuard()
         self.formatter = NewsFormatter()
         self.translator = AutoTranslator()
         self.rss = RSSParser()
+        self.emoji_loader = EmojiPackLoader(config.emoji_storage_path)
+        self.pack_emoji_cache: dict[str, int] = self.emoji_loader.read_cache()
         self.queue: asyncio.Queue[IncomingPost] = asyncio.Queue(maxsize=3000)
         self.user_windows: dict[int, deque[int]] = {}
+
+    def attach_user_client(self, client: TelegramClient) -> None:
+        self.user_client = client
+
+    async def refresh_emoji_packs(self) -> int:
+        if not self.user_client:
+            return len(self.pack_emoji_cache)
+        loaded = await self.emoji_loader.load_all(self.user_client, config.emoji_packs)
+        self.pack_emoji_cache = loaded
+
+        # combo mode: config + packs. keep config first, enrich with known semantic symbols from packs.
+        symbol_to_key = {
+            "👀": "DEFAULT",
+            "❗️": "IMPORTANT",
+            "⚡️": "ECONOMY",
+            "💭": "DIPLOMACY",
+            "⚠️": "WARNING",
+            "🌐": "MAP",
+            "📈": "ECONOMY",
+        }
+        for packed_name, doc_id in loaded.items():
+            _, _, symbol = packed_name.partition(":")
+            key = symbol_to_key.get(symbol)
+            if key:
+                config.premium_emoji_ids[key] = str(doc_id)
+
+        return len(loaded)
 
     async def is_paused(self) -> bool:
         return await self.db.get_state("paused", "0") == "1"
@@ -181,20 +214,20 @@ class NewsService:
 
     async def publish_and_mark(self, post: IncomingPost, formatted: str, entities: list | None, hash_value: str) -> None:
         try:
-            await self.bot.send_message(
-                chat_id=config.target_channel,
-                text=formatted,
-                entities=entities,
-                disable_web_page_preview=False,
-            )
+            if self.user_client:
+                await self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+            else:
+                await self.bot.send_message(chat_id=config.target_channel, text=formatted)
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
-        except TelegramBadRequest:
+        except (TelegramBadRequest, RPCError):
             logger.exception("Publish failed")
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
         try:
-            if post.media_type == "photo" and post.media_file_id:
+            if self.user_client and post.media_file_id:
+                await self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+            elif post.media_type == "photo" and post.media_file_id:
                 await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
             elif post.media_type == "video" and post.media_file_id:
                 await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
@@ -206,7 +239,7 @@ class NewsService:
 
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
             logger.info("Published media %s/%s", post.source_channel, post.message_id)
-        except TelegramBadRequest:
+        except (TelegramBadRequest, RPCError):
             logger.exception("Media publish failed")
 
     async def send_to_moderation(self, post: IncomingPost, text: str, reason: str) -> None:
@@ -258,8 +291,10 @@ class NewsService:
             )
 
     async def publish_map_digest(self, file_id: str | None, media_type: str, comment: str) -> None:
-        escaped = re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}\.!])", r"\\\1", comment[:120])
-        title = f"> *Сводка:* _{escaped}_"
+        title = f"Сводка: {comment[:120]}"
+        if self.user_client and file_id:
+            await self.user_client.send_file(config.target_channel, file=file_id, caption=title)
+            return
         if media_type == "photo" and file_id:
             await self.bot.send_photo(config.target_channel, file_id, caption=title)
         elif media_type == "document" and file_id:

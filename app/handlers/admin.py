@@ -68,7 +68,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
     async def start_cmd(message: Message) -> None:
         await message.answer(
             "Бот активен.\n"
-            "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list\n\n"
+            "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list /emoji_reload /emoji_list\n\n"
             "Для /write_news обязательно укажите хештег страны (например #OBS).\n"
             "Хештеги публикуются в английском формате.\n"
             "Новость не должна нарушать RP-правила, иначе будет отклонена."
@@ -162,6 +162,24 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await state.clear()
         except Exception:
             await message.answer("Неверный формат. Пример: 2026-02-21 19:30 | Вилония | Текст")
+
+
+    @router.message(Command("emoji_reload"))
+    async def emoji_reload_cmd(message: Message) -> None:
+        if message.from_user and message.from_user.id != config.admin_id:
+            await message.answer("Недостаточно прав")
+            return
+        count = await service.refresh_emoji_packs()
+        await message.answer(f"Emoji packs reloaded: {count}")
+
+    @router.message(Command("emoji_list"))
+    async def emoji_list_cmd(message: Message) -> None:
+        if not service.pack_emoji_cache:
+            await message.answer("Emoji cache пуст. Используйте /emoji_reload")
+            return
+        sample = list(service.pack_emoji_cache.items())[:50]
+        lines = [f"{k} -> {v}" for k, v in sample]
+        await message.answer("\n".join(lines))
 
     @router.message(Command("rss_add"))
     async def rss_add_cmd(message: Message) -> None:

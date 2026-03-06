@@ -92,6 +92,9 @@ class AppRuntime:
                 return
 
             logger.info("Userbot authorized and connected")
+            service.attach_user_client(self.userbot)
+            loaded = await service.refresh_emoji_packs()
+            logger.info("Loaded custom emoji pack cache: %s", loaded)
             await asyncio.gather(
                 self.dispatcher.start_polling(self.bot),
                 self.userbot.run_until_disconnected(),
