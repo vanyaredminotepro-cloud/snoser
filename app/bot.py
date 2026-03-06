@@ -22,6 +22,18 @@ def _extract_text(msg: Message) -> str:
     return (msg.message or msg.raw_text or "").strip()
 
 
+def _extract_media_metadata(msg: Message) -> tuple[str | None, str | None]:
+    if msg.photo:
+        return str(msg.photo), "photo"
+    if msg.video:
+        return str(msg.video), "video"
+    if msg.gif:
+        return str(msg.gif), "animation"
+    if msg.document:
+        return str(msg.document), "document"
+    return None, None
+
+
 class AppRuntime:
     def __init__(self) -> None:
         self.bot = Bot(token=config.bot_token)
@@ -62,14 +74,15 @@ class AppRuntime:
                 return
 
             title = getattr(channel, "title", None) or getattr(channel, "username", "unknown")
+            media_file_id, media_type = _extract_media_metadata(event.message)
             post = IncomingPost(
                 source_country=country,
                 source_channel=str(getattr(channel, "username", title)),
                 message_id=event.message.id,
                 text=text,
                 has_media=bool(event.message.media),
-                media_file_id=None,
-                media_type=None,
+                media_file_id=media_file_id,
+                media_type=media_type,
             )
             await service.enqueue(post)
 

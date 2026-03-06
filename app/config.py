@@ -1,12 +1,28 @@
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _required_env_int(name: str) -> int:
+    raw = _required_env(name)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
 
 
 @dataclass(slots=True)
 class Config:
-    api_id: int = 23695534
-    api_hash: str = "08f5b069bb4fd8505b98a6b57f857868"
-    bot_token: str = "8559159012:AAEz0BgKDRgRYFfCcXDf5VNrpS2uVp-mwCo"
+    api_id: int = field(default_factory=lambda: _required_env_int("TG_API_ID"))
+    api_hash: str = field(default_factory=lambda: _required_env("TG_API_HASH"))
+    bot_token: str = field(default_factory=lambda: _required_env("TG_BOT_TOKEN"))
 
     admin_id: int = 5006629901
     admin_username: str = "@supermegaluti"
