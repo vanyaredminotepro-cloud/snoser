@@ -52,6 +52,30 @@ Production-ready асинхронный Telegram-агрегатор RP-ново�
 
 Все настройки находятся в `app/config.py` в классе `Config`.
 
+Перед запуском обязательно задайте переменные окружения Telegram:
+
+- `TG_API_ID` (или `API_ID`)
+- `TG_API_HASH` (или `API_HASH`)
+- `TG_BOT_TOKEN` (или `BOT_TOKEN`)
+
+Пример для Linux/macOS:
+
+```bash
+export TG_API_ID=12345678
+export TG_API_HASH=0123456789abcdef0123456789abcdef
+export TG_BOT_TOKEN=123456:ABCDEF...
+python -m app.main
+```
+
+Пример для Windows PowerShell:
+
+```powershell
+$env:TG_API_ID="12345678"
+$env:TG_API_HASH="0123456789abcdef0123456789abcdef"
+$env:TG_BOT_TOKEN="123456:ABCDEF..."
+python -m app.main
+```
+
 Изменяемые параметры:
 - источники
 - хештеги стран

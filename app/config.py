@@ -3,26 +3,30 @@ import os
 from pathlib import Path
 
 
-def _required_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+def _first_present_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return None
 
 
-def _required_env_int(name: str) -> int:
-    raw = _required_env(name)
+def _optional_env_int(*names: str) -> int | None:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
     try:
         return int(raw)
     except ValueError as exc:
-        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
 @dataclass(slots=True)
 class Config:
-    api_id: int = field(default_factory=lambda: _required_env_int("TG_API_ID"))
-    api_hash: str = field(default_factory=lambda: _required_env("TG_API_HASH"))
-    bot_token: str = field(default_factory=lambda: _required_env("TG_BOT_TOKEN"))
+    api_id: int | None = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
+    api_hash: str | None = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
+    bot_token: str | None = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
     admin_id: int = 5006629901
     admin_username: str = "@supermegaluti"
@@ -161,6 +165,26 @@ class Config:
             "ФШП": ["фшп", "пехико"],
         }
     )
+
+
+
+    def require_runtime_credentials(self) -> tuple[int, str, str]:
+        missing: list[str] = []
+        if self.api_id is None:
+            missing.append("TG_API_ID (or API_ID)")
+        if not self.api_hash:
+            missing.append("TG_API_HASH (or API_HASH)")
+        if not self.bot_token:
+            missing.append("TG_BOT_TOKEN (or BOT_TOKEN)")
+
+        if missing:
+            joined = ", ".join(missing)
+            raise RuntimeError(
+                "Telegram credentials are not configured. "
+                f"Set environment variables: {joined}."
+            )
+
+        return self.api_id, self.api_hash, self.bot_token
 
     manual_country_authors: dict[str, list[int]] = field(
         default_factory=lambda: {

@@ -36,9 +36,10 @@ def _extract_media_metadata(msg: Message) -> tuple[str | None, str | None]:
 
 class AppRuntime:
     def __init__(self) -> None:
-        self.bot = Bot(token=config.bot_token)
+        api_id, api_hash, bot_token = config.require_runtime_credentials()
+        self.bot = Bot(token=bot_token)
         self.dispatcher = Dispatcher()
-        self.userbot = TelegramClient(config.session_name, config.api_id, config.api_hash)
+        self.userbot = TelegramClient(config.session_name, api_id, api_hash)
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
