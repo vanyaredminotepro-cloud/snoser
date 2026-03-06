@@ -1,9 +1,25 @@
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+from typing import Optional
 
 
-def _first_present_env(*names: str) -> str | None:
+def _load_dotenv_if_present(path: Path = Path(".env")) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", maxsplit=1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _first_present_env(*names: str) -> Optional[str]:
     for name in names:
         value = os.getenv(name, "").strip()
         if value:
@@ -11,7 +27,7 @@ def _first_present_env(*names: str) -> str | None:
     return None
 
 
-def _optional_env_int(*names: str) -> int | None:
+def _optional_env_int(*names: str) -> Optional[int]:
     raw = _first_present_env(*names)
     if raw is None:
         return None
@@ -24,9 +40,9 @@ def _optional_env_int(*names: str) -> int | None:
 
 @dataclass(slots=True)
 class Config:
-    api_id: int | None = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
-    api_hash: str | None = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
-    bot_token: str | None = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
+    api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
+    api_hash: Optional[str] = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
+    bot_token: Optional[str] = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
     admin_id: int = 5006629901
     admin_username: str = "@supermegaluti"
@@ -203,5 +219,7 @@ class Config:
         }
     )
 
+
+_load_dotenv_if_present()
 
 config = Config()

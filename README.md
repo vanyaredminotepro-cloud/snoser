@@ -76,6 +76,15 @@ $env:TG_BOT_TOKEN="123456:ABCDEF..."
 python -m app.main
 ```
 
+
+Также можно создать `.env` в корне проекта (без кавычек):
+
+```env
+TG_API_ID=12345678
+TG_API_HASH=0123456789abcdef0123456789abcdef
+TG_BOT_TOKEN=123456:ABCDEF...
+```
+
 Изменяемые параметры:
 - источники
 - хештеги стран
