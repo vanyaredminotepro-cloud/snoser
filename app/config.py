@@ -80,6 +80,7 @@ class Config:
             "Антония": "antoniats",
             "Вилония": "Viloniarp",
             "ТНР": "NARallies",
+            "ОСР": "OSRres",
             "Олбония": "olbonia",
             "Северландия": "severlandia",
             "Обоссляндия": "obosslandia",
