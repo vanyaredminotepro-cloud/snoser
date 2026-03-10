@@ -8,7 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -29,6 +29,10 @@ class ScheduleState(StatesGroup):
 
 class MapState(StatesGroup):
     waiting_media = State()
+
+
+class RegistrationState(StatesGroup):
+    waiting_form = State()
 
 
 def _extract_media(message: Message) -> tuple[str | None, str | None]:
@@ -63,11 +67,83 @@ def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
     return user_id in allowed_ids or user_id == config.admin_id
 
 
+
+
+REG_TYPE_LABELS = {
+    "person": "Известный человек",
+    "group": "Группировка",
+    "country": "Страна",
+}
+
+REGISTRATION_TEMPLATES = {
+    "country": """Шаблон анкеты для страны:
+
+1. Название вашей страны
+2. Количество солдат в стране (от 10 до 20)
+3. Количество граждан (от 25 до 40)
+4. Территория для регистрации
+5. Флаг вашей страны
+6. Гимн страны (необязательно)
+7. Позывной/имя руководителя страны
+8. Местоположение столицы
+9. Бюджет страны (50-100 тыс. вирт рублей)
+10. Цвет страны на карте (нельзя: серый/белый/чёрный)
+
+Отправьте заполненную анкету одним сообщением.""",
+    "group": """Шаблон анкеты для группировки:
+
+1. Префикс группировки (ЧВК, ДШРГ и т.д.)
+2. Название и полное звучание
+3. Зависимая/независимая
+4. Задачи группировки
+5. Численность (20-40)
+6. Позывной командира
+7. Страна базирования (если зависима)
+8. Бюджет (20-35 тыс. вирт-рублей)
+
+Отправьте заполненную анкету одним сообщением.""",
+    "person": """Шаблон анкеты для известного человека:
+
+1. Ненастоящее имя/позывной
+2. Страна деятельности
+3. С чем связана деятельность
+4. Работа
+5. Деньги (10-15 тыс. вирт рублей)
+
+Отправьте заполненную анкету одним сообщением.""",
+}
+
+
+def _registration_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Зарегистрироваться как известный человек", callback_data="reg:person")],
+            [InlineKeyboardButton(text="Зарегистрироваться как группировка", callback_data="reg:group")],
+            [InlineKeyboardButton(text="Зарегистрироваться как страна", callback_data="reg:country")],
+        ]
+    )
+
+
+def _extract_country_name_from_form(form_text: str) -> str:
+    for line in form_text.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        m = re.match(r"^(?:1[\).:-]?|1\s+)(.+)$", raw)
+        if m:
+            return m.group(1).strip()
+    first = next((l.strip() for l in form_text.splitlines() if l.strip()), "")
+    return first[:80] if first else "Неизвестная страна"
+
+
 def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(Command("start"))
     async def start_cmd(message: Message) -> None:
         keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="/write_news")]],
+            keyboard=[
+                [KeyboardButton(text="/write_news")],
+                [KeyboardButton(text="📝 Анкета / создать страну")],
+            ],
             resize_keyboard=True,
         )
         await message.answer(
@@ -78,6 +154,57 @@ def bind_admin_handlers(service: NewsService) -> Router:
             "Новость не должна нарушать RP-правила, иначе будет отклонена.",
             reply_markup=keyboard,
         )
+
+    @router.message(Command("anketa"))
+    @router.message(F.text == "📝 Анкета / создать страну")
+    @router.message(F.text == "Создать страну")
+    async def anketa_menu(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(
+            "Выберите тип регистрации:",
+            reply_markup=_registration_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data.startswith("reg:"))
+    async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        _, reg_type = callback.data.split(":", maxsplit=1)
+        if reg_type not in REGISTRATION_TEMPLATES:
+            await callback.answer("Неизвестный тип", show_alert=True)
+            return
+        await state.set_state(RegistrationState.waiting_form)
+        await state.update_data(reg_type=reg_type)
+        await callback.message.answer(REGISTRATION_TEMPLATES[reg_type])
+        await callback.answer()
+
+    @router.message(RegistrationState.waiting_form)
+    async def registration_form_flow(message: Message, state: FSMContext) -> None:
+        raw_form = (message.text or message.caption or "").strip()
+        if not raw_form:
+            await message.answer("Отправьте анкету текстом одним сообщением.")
+            return
+
+        data = await state.get_data()
+        reg_type = str(data.get("reg_type", "person"))
+        label = REG_TYPE_LABELS.get(reg_type, reg_type)
+        user = message.from_user
+        user_id = user.id if user else 0
+        username = f"@{user.username}" if user and user.username else "без username"
+
+        admin_text = (
+            "Новая заявка на регистрацию\n"
+            f"Тип: {label}\n"
+            f"User ID: {user_id}\n"
+            f"Username: {username}\n\n"
+            f"Анкета:\n{raw_form[:3500]}"
+        )
+        await message.bot.send_message(config.admin_id, admin_text)
+
+        if reg_type == "country" and user_id:
+            country_name = _extract_country_name_from_form(raw_form)
+            await service.db.add_country_leader(country_name, user_id, source="registration")
+
+        await state.clear()
+        await message.answer("Анкета отправлена админу в ЛС (@supermegaluti).")
 
     @router.message(Command("status"))
     async def status_cmd(message: Message) -> None:

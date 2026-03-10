@@ -132,6 +132,8 @@ async def run_from_script() -> None:
     config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(str(config.sqlite_path))
     await db.init()
+    seeded = await db.seed_country_leaders(config.manual_country_authors)
+    logger.info("Country leaders seeded from config: %s", seeded)
 
     try:
         runtime = AppRuntime()

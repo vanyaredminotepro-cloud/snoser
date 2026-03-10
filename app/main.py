@@ -21,6 +21,8 @@ async def main() -> None:
 
     db = Database(str(config.sqlite_path))
     await db.init()
+    seeded = await db.seed_country_leaders(config.manual_country_authors)
+    logger.info("Country leaders seeded from config: %s", seeded)
 
     try:
         runtime = AppRuntime()
