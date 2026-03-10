@@ -1,6 +1,6 @@
 import re
 
-from telethon.tl.types import MessageEntityBold, MessageEntityCustomEmoji, MessageEntityItalic
+from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, MessageEntityCustomEmoji, MessageEntityItalic
 
 
 class NewsFormatter:
@@ -143,6 +143,9 @@ class NewsFormatter:
         entities: list = []
         # line 1 entities
         l1 = lines[0]
+
+        # quote-style rendering for the headline line
+        entities.append(MessageEntityBlockquote(offset=0, length=self._utf16_len(l1)))
         if emoji_id is not None:
             entities.append(MessageEntityCustomEmoji(offset=0, length=self._utf16_len(emoji_char), document_id=emoji_id))
 

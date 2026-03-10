@@ -4,3 +4,5 @@ __pycache__/
 *.session
 logs/*.log
 app/storage/*.sqlite3
+.env
+.env.local
