@@ -84,6 +84,7 @@ class AppRuntime:
                 has_media=bool(event.message.media),
                 media_file_id=media_file_id,
                 media_type=media_type,
+                submitted_by_user_id=None,
             )
             await service.enqueue(post)
 
