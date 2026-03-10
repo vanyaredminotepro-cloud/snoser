@@ -8,7 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -66,12 +66,17 @@ def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
 def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(Command("start"))
     async def start_cmd(message: Message) -> None:
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="/write_news")]],
+            resize_keyboard=True,
+        )
         await message.answer(
             "Бот активен.\n"
             "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list /emoji_reload /emoji_list\n\n"
             "Для /write_news обязательно укажите хештег страны (например #OBS).\n"
             "Хештеги публикуются в английском формате.\n"
-            "Новость не должна нарушать RP-правила, иначе будет отклонена."
+            "Новость не должна нарушать RP-правила, иначе будет отклонена.",
+            reply_markup=keyboard,
         )
 
     @router.message(Command("status"))
@@ -227,7 +232,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             return
 
         payload = json.loads(payload_raw)
-        hash_value = content_hash(f"{payload['source_channel']}:{payload['message_id']}:{payload['formatted_text']}")
+        hash_value = payload.get("hash_value") or content_hash(f"{payload['source_channel']}:{payload['message_id']}:{payload['formatted_text']}")
         post = IncomingPost(
             source_country=payload["source_country"],
             source_channel=payload["source_channel"],
@@ -238,15 +243,21 @@ def bind_admin_handlers(service: NewsService) -> Router:
             media_type=payload.get("media_type"),
         )
 
-        if action == "approve":
+        if action in {"approve", "war_ok"}:
             if post.has_media:
                 await service.publish_media_and_mark(post, payload["formatted_text"], hash_value)
             else:
                 await service.publish_and_mark(post, payload["formatted_text"], None, hash_value)
-            await callback.message.answer("Одобрено и опубликовано")
+            if action == "war_ok":
+                await callback.message.answer("Классифицировано как операция без ВД: опубликовано")
+            else:
+                await callback.message.answer("Одобрено и опубликовано")
         else:
             await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
-            await callback.message.answer("Отклонено")
+            if action == "war_block":
+                await callback.message.answer("Классифицировано как военные действия: отклонено")
+            else:
+                await callback.message.answer("Отклонено")
 
         await callback.answer()
 

@@ -44,6 +44,18 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    @staticmethod
+    def _known_country_terms() -> set[str]:
+        terms: set[str] = set()
+        for country in config.country_hashtags.keys():
+            terms.add(country.lower())
+        for country in config.source_channels.keys():
+            terms.add(country.lower())
+        for aliases in config.country_aliases.values():
+            for alias in aliases:
+                terms.add(alias.lower())
+        return terms
+
     async def refresh_emoji_packs(self) -> int:
         if not self.user_client:
             return len(self.pack_emoji_cache)
@@ -183,16 +195,13 @@ class NewsService:
                 await self.send_to_moderation(post, translated or "[MEDIA]", ai_result.reason)
             return
 
-        filter_result = self.rp_filter.check(translated or "media news")
+        filter_result = self.rp_filter.check(translated or "media news", known_countries=self._known_country_terms())
 
         if not filter_result.allowed:
             logger.info("Blocked by RP filter %s: %s/%s", filter_result.reason, post.source_channel, post.message_id)
             if post.has_media:
                 await self.send_to_moderation(post, translated or "[MEDIA]", filter_result.reason)
             return
-
-        if filter_result.reason.startswith("ALLOWED_WAR"):
-            await self.register_war_event(translated)
 
         rewritten = self.formatter.rewrite(post.source_country, translated)
         formatted, entities = self.formatter.format_news_entities(
@@ -202,6 +211,10 @@ class NewsService:
             premium_emoji_ids=config.premium_emoji_ids,
             country_aliases=config.country_aliases,
         )
+
+        if filter_result.reason == "MILITARY_OPERATION_REVIEW":
+            await self.send_to_moderation(post, formatted, "MILITARY_REQUIRES_ADMIN_CLASSIFICATION", review_mode="war")
+            return
 
         if post.has_media:
             await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL")
@@ -242,7 +255,7 @@ class NewsService:
         except (TelegramBadRequest, RPCError):
             logger.exception("Media publish failed")
 
-    async def send_to_moderation(self, post: IncomingPost, text: str, reason: str) -> None:
+    async def send_to_moderation(self, post: IncomingPost, text: str, reason: str, review_mode: str = "default") -> None:
         token = uuid.uuid4().hex
         payload = {
             "source_country": post.source_country,
@@ -252,6 +265,8 @@ class NewsService:
             "has_media": post.has_media,
             "media_file_id": post.media_file_id,
             "media_type": post.media_type,
+            "review_mode": review_mode,
+            "hash_value": content_hash(f"{post.source_channel}:{post.message_id}:{text}"),
         }
         await self.db.store_moderation_payload(token, json.dumps(payload, ensure_ascii=False))
 
@@ -265,15 +280,15 @@ class NewsService:
 
         if post.has_media and post.media_file_id:
             if post.media_type == "photo":
-                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token, review_mode=review_mode))
             elif post.media_type == "video":
-                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token, review_mode=review_mode))
             elif post.media_type == "animation":
-                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token, review_mode=review_mode))
             else:
-                await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token))
+                await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token, review_mode=review_mode))
         else:
-            await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token))
+            await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token, review_mode=review_mode))
 
     async def register_war_event(self, text: str) -> None:
         counter = int(await self.db.get_state("war_event_counter", "0")) + 1
