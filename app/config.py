@@ -22,6 +22,7 @@ def _load_dotenv_file(path: Path) -> None:
 def _load_dotenv_if_present(paths: Optional[Iterable[Path]] = None) -> None:
     candidates = list(paths or [
         Path.cwd() / ".env",
+        Path(__file__).resolve().parent / ".env",
         Path(__file__).resolve().parents[1] / ".env",
     ])
     seen: set[Path] = set()

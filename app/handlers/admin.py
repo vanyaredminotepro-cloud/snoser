@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
@@ -76,6 +75,8 @@ def _normalize_hashtags_to_english(text: str) -> str:
         for alias in config.country_aliases.get(country, []):
             out = re.sub(rf"(?i)#{re.escape(alias)}\b", eng, out)
     return out
+
+
 def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
     allowed_ids = config.manual_country_authors.get(country)
     if not allowed_ids:
@@ -142,19 +143,19 @@ def _extract_country_name_from_form(form_text: str) -> str:
 
 
 def bind_admin_handlers(service: NewsService) -> Router:
-    @router.message(Command("start"))
+    @router.message(F.text == "/start")
     async def start_cmd(message: Message) -> None:
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="/write_news")],
-                [KeyboardButton(text="📝 Анкета / создать страну")],
-            ],
-            resize_keyboard=True,
-        )
+        rows = [
+            [KeyboardButton(text="📰 Написать новость")],
+            [KeyboardButton(text="📝 Анкета / создать страну")],
+        ]
+        if message.from_user and message.from_user.id == config.admin_id:
+            rows.append([KeyboardButton(text="⚙️ Админ-панель")])
+        keyboard = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
         text = (
             "Бот активен.\n"
-            "Команды: /status /pause /resume /write_news /schedule_news /submit_map /rss_add /rss_list /emoji_reload /emoji_list /anketa\n\n"
-            "Для /write_news обязательно укажите хештег страны (например #OBS)."
+            "Используйте кнопки меню ниже.\n\n"
+            "Для публикации новости укажите корректный хештег страны (например #OBS)."
         )
         if message.from_user and message.from_user.id == config.admin_id:
             await message.answer(text, reply_markup=keyboard)
@@ -162,7 +163,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         else:
             await message.answer(text, reply_markup=keyboard)
 
-    @router.message(Command("admin"))
+    @router.message(F.text == "⚙️ Админ-панель")
     async def admin_panel_cmd(message: Message) -> None:
         if not message.from_user or message.from_user.id != config.admin_id:
             await message.answer("Эта панель доступна только администратору.")
@@ -194,7 +195,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             count = await service.refresh_emoji_packs()
             await callback.message.answer(f"Emoji packs reloaded: {count}")
 
-    @router.message(Command("anketa"))
+    @router.message(F.text == "📝 Анкета / создать страну")
     @router.message(F.text == "📝 Анкета / создать страну")
     @router.message(F.text == "Создать страну")
     async def anketa_menu(message: Message, state: FSMContext) -> None:
@@ -291,12 +292,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer("Отказ отправлен пользователю.")
         await state.clear()
 
-    @router.message(Command("status"))
+    @router.message(F.text == "Статус")
     async def status_cmd(message: Message) -> None:
         paused = await service.is_paused()
         await message.answer(f"Статус: {'PAUSED' if paused else 'RUNNING'}\nОчередь: {service.queue.qsize()}\nTarget: {config.target_channel}")
 
-    @router.message(Command("pause"))
+    @router.message(F.text == "Пауза")
     async def pause_cmd(message: Message) -> None:
         if message.from_user and message.from_user.id != config.admin_id:
             await message.answer("Недостаточно прав")
@@ -304,7 +305,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await service.set_paused(True)
         await message.answer("Пауза включена")
 
-    @router.message(Command("resume"))
+    @router.message(F.text == "Резюме")
     async def resume_cmd(message: Message) -> None:
         if message.from_user and message.from_user.id != config.admin_id:
             await message.answer("Недостаточно прав")
@@ -312,7 +313,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await service.set_paused(False)
         await message.answer("Пауза отключена")
 
-    @router.message(Command("write_news"))
+    @router.message(F.text.in_(["📰 Написать новость", "/write_news"]))
     async def write_news_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(WriteNewsState.waiting_text)
         await message.answer("Отправьте текст/медиа новости. Нужен хештег страны (#OBS / #OB / #VL и т.д.)")
@@ -352,7 +353,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await state.clear()
         await message.answer("Принято в очередь")
 
-    @router.message(Command("schedule_news"))
+    @router.message(F.text == "Планировать новость")
     async def schedule_news_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(ScheduleState.waiting_payload)
         await message.answer("Формат: YYYY-mm-dd HH:MM | COUNTRY | TEXT")
@@ -369,7 +370,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         except Exception:
             await message.answer("Неверный формат. Пример: 2026-02-21 19:30 | Вилония | Текст")
 
-    @router.message(Command("emoji_reload"))
+    @router.message(F.text == "Emoji reload")
     async def emoji_reload_cmd(message: Message) -> None:
         if message.from_user and message.from_user.id != config.admin_id:
             await message.answer("Недостаточно прав")
@@ -377,7 +378,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         count = await service.refresh_emoji_packs()
         await message.answer(f"Emoji packs reloaded: {count}")
 
-    @router.message(Command("emoji_list"))
+    @router.message(F.text == "Emoji list")
     async def emoji_list_cmd(message: Message) -> None:
         if not service.pack_emoji_cache:
             await message.answer("Emoji cache пуст. Используйте /emoji_reload")
@@ -385,7 +386,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         sample = list(service.pack_emoji_cache.items())[:50]
         await message.answer("\n".join([f"{k} -> {v}" for k, v in sample]))
 
-    @router.message(Command("rss_add"))
+    @router.message(F.text.startswith("RSS добавить "))
     async def rss_add_cmd(message: Message) -> None:
         if not message.text:
             return
@@ -397,14 +398,14 @@ def bind_admin_handlers(service: NewsService) -> Router:
         config.rss_feeds[key] = url
         await message.answer(f"RSS добавлен: {key}")
 
-    @router.message(Command("rss_list"))
+    @router.message(F.text == "RSS список")
     async def rss_list_cmd(message: Message) -> None:
         if not config.rss_feeds:
             await message.answer("RSS пуст")
             return
         await message.answer("\n".join([f"{k}: {u}" for k, u in config.rss_feeds.items()]))
 
-    @router.message(Command("submit_map"))
+    @router.message(F.text == "Отправить карту")
     async def submit_map_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(MapState.waiting_media)
         await message.answer("Отправьте фото/файл карты и подпись комментария.")
