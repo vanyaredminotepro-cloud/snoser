@@ -64,6 +64,18 @@ def _detect_claimed_country(text: str) -> str:
     return "MANUAL"
 
 
+
+
+def _normalize_hashtags_to_english(text: str) -> str:
+    out = text
+    for country, tags in config.country_hashtags.items():
+        if not tags:
+            continue
+        eng = tags[0]
+        out = re.sub(rf"(?i)#{re.escape(country)}\b", eng, out)
+        for alias in config.country_aliases.get(country, []):
+            out = re.sub(rf"(?i)#{re.escape(alias)}\b", eng, out)
+    return out
 def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
     allowed_ids = config.manual_country_authors.get(country)
     if not allowed_ids:
@@ -162,6 +174,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
+        await callback.answer()
         action = callback.data.split(":", maxsplit=1)[1]
         if action == "status":
             paused = await service.is_paused()
@@ -180,7 +193,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         elif action == "emoji_reload":
             count = await service.refresh_emoji_packs()
             await callback.message.answer(f"Emoji packs reloaded: {count}")
-        await callback.answer()
 
     @router.message(Command("anketa"))
     @router.message(F.text == "📝 Анкета / создать страну")
@@ -307,7 +319,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(WriteNewsState.waiting_text)
     async def write_news_flow(message: Message, state: FSMContext) -> None:
-        text = (message.caption or message.text or "").strip()
+        text = _normalize_hashtags_to_english((message.caption or message.text or "").strip())
         if not text and not (message.photo or message.video or message.animation):
             await message.answer("Пустой текст")
             return
@@ -410,6 +422,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
+        await callback.answer()
 
         _, action, token = callback.data.split(":", maxsplit=2)
         payload_raw = await service.db.pop_moderation_payload(token)
@@ -441,7 +454,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
             await callback.message.answer("Отклонено" if action != "war_block" else "Классифицировано как военные действия: отклонено")
 
-        await callback.answer()
 
     @router.message(F.from_user.as_("u"), F.text.startswith("/"))
     async def antiflood_command_guard(message: Message, u) -> None:  # type: ignore[no-redef]

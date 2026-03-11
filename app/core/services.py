@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -21,7 +22,7 @@ from app.parsers.emoji_packs import EmojiPackLoader
 from app.parsers.rss_parser import RSSParser
 from app.parsers.translator import AutoTranslator
 from app.storage.database import Database
-from app.utils.text_tools import autocorrect_news_text, content_hash, strip_hashtags
+from app.utils.text_tools import autocorrect_news_text, content_hash, strip_emojis, strip_hashtags
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,23 @@ class NewsService:
             premium_emoji_ids=config.premium_emoji_ids,
             country_aliases=config.country_aliases,
         )
+
+    @staticmethod
+    def _source_link(post: IncomingPost) -> str | None:
+        channel = (post.source_channel or "").lstrip("@")
+        if channel and channel.replace("_", "").isalnum() and post.message_id:
+            return f"https://t.me/{channel}/{post.message_id}"
+        return None
+
+    def _summarize_if_huge(self, post: IncomingPost, text: str) -> str:
+        if len(text) <= 900:
+            return text
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        summary = " ".join(sentences[:2]).strip() or text[:400]
+        link = self._source_link(post)
+        if link:
+            return f"{summary}\n\nПолная новость: {link}"
+        return summary
 
     async def refresh_emoji_packs(self) -> int:
         if not self.user_client:
@@ -209,7 +227,8 @@ class NewsService:
             return
 
         translated = await self.translator.to_russian(source_text) if source_text else ""
-        corrected = autocorrect_news_text(translated or source_text)
+        corrected = autocorrect_news_text(strip_emojis(translated or source_text))
+        corrected = self._summarize_if_huge(post, corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
