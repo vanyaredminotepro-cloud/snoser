@@ -214,3 +214,9 @@ class Database:
         if not row:
             return None
         return int(row[0]), int(row[1])
+
+    async def is_country_leader(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("SELECT 1 FROM country_leaders WHERE user_id = ? LIMIT 1", (user_id,))
+            row = await cursor.fetchone()
+        return row is not None

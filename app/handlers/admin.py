@@ -77,6 +77,32 @@ def _normalize_hashtags_to_english(text: str) -> str:
     return out
 
 
+
+
+def _extract_final_hashtag(text: str) -> str | None:
+    m = re.search(r"#([A-Za-zА-Яа-я0-9_]+)\s*$", text.strip())
+    return f"#{m.group(1)}" if m else None
+
+
+def _normalize_single_hashtag(tag: str) -> str:
+    upper = tag.upper()
+    alias_map = {"#ТНР": "#TNR", "#КК8": "#KK8", "#LEKSY": "#LKS"}
+    return alias_map.get(upper, upper)
+
+
+def _country_by_hashtag(tag: str) -> str | None:
+    normalized = _normalize_single_hashtag(tag)
+    for country, tags in config.country_hashtags.items():
+        if normalized in {t.upper() for t in tags}:
+            return country
+    return None
+
+
+def _is_news_submission(text: str, state_name: str | None) -> bool:
+    if state_name == WriteNewsState.waiting_text.state:
+        return True
+    return "#" in text
+
 def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
     allowed_ids = config.manual_country_authors.get(country)
     if not allowed_ids:
@@ -88,12 +114,16 @@ REG_TYPE_LABELS = {
     "person": "Известный человек",
     "group": "Группировка",
     "country": "Страна",
+    "movement": "Движение",
+    "party": "Партия",
 }
 
 REGISTRATION_TEMPLATES = {
     "country": """Шаблон анкеты для страны:\n\n1. Название вашей страны\n2. Количество солдат в стране (от 10 до 20)\n3. Количество граждан (от 25 до 40)\n4. Территория для регистрации\n5. Флаг вашей страны\n6. Гимн страны (необязательно)\n7. Позывной/имя руководителя страны\n8. Местоположение столицы\n9. Бюджет страны (50-100 тыс. вирт рублей)\n10. Цвет страны на карте (нельзя: серый/белый/чёрный)\n\nОтправьте заполненную анкету одним сообщением.""",
     "group": """Шаблон анкеты для группировки:\n\n1. Префикс группировки (ЧВК, ДШРГ и т.д.)\n2. Название и полное звучание\n3. Зависимая/независимая\n4. Задачи группировки\n5. Численность (20-40)\n6. Позывной командира\n7. Страна базирования (если зависима)\n8. Бюджет (20-35 тыс. вирт-рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
     "person": """Шаблон анкеты для известного человека:\n\n1. Ненастоящее имя/позывной\n2. Страна деятельности\n3. С чем связана деятельность\n4. Работа\n5. Деньги (10-15 тыс. вирт рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
+    "movement": """Шаблон анкеты для движения:\n\n1. Название движения\n2. Идеология/цель\n3. Лидер\n4. Страна деятельности\n5. Краткий план действий\n\nОтправьте заполненную анкету одним сообщением.""",
+    "party": """Шаблон анкеты для партии:\n\n1. Название партии\n2. Лидер партии\n3. Политическая программа\n4. Страна деятельности\n5. Цели на ближайший период\n\nОтправьте заполненную анкету одним сообщением.""",
 }
 
 
@@ -103,6 +133,8 @@ def _registration_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Зарегистрироваться как известный человек", callback_data="reg:person")],
             [InlineKeyboardButton(text="Зарегистрироваться как группировка", callback_data="reg:group")],
             [InlineKeyboardButton(text="Зарегистрироваться как страна", callback_data="reg:country")],
+            [InlineKeyboardButton(text="Создать движение", callback_data="reg:movement")],
+            [InlineKeyboardButton(text="Создать партию", callback_data="reg:party")],
         ]
     )
 
@@ -196,7 +228,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer(f"Emoji packs reloaded: {count}")
 
     @router.message(F.text == "📝 Анкета / создать страну")
-    @router.message(F.text == "📝 Анкета / создать страну")
     @router.message(F.text == "Создать страну")
     async def anketa_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -205,9 +236,14 @@ def bind_admin_handlers(service: NewsService) -> Router:
     @router.callback_query(F.data.startswith("reg:"))
     async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
         _, reg_type = callback.data.split(":", maxsplit=1)
+        if reg_type in {"movement", "party"}:
+            if await service.db.is_country_leader(callback.from_user.id):
+                await callback.answer("Недоступно: у вас уже есть страна/группировка.", show_alert=True)
+                return
         if reg_type not in REGISTRATION_TEMPLATES:
             await callback.answer("Неизвестный тип", show_alert=True)
             return
+
         await state.set_state(RegistrationState.waiting_form)
         await state.update_data(reg_type=reg_type)
         await callback.message.answer(REGISTRATION_TEMPLATES[reg_type])
@@ -292,28 +328,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer("Отказ отправлен пользователю.")
         await state.clear()
 
-    @router.message(F.text == "Статус")
-    async def status_cmd(message: Message) -> None:
-        paused = await service.is_paused()
-        await message.answer(f"Статус: {'PAUSED' if paused else 'RUNNING'}\nОчередь: {service.queue.qsize()}\nTarget: {config.target_channel}")
-
-    @router.message(F.text == "Пауза")
-    async def pause_cmd(message: Message) -> None:
-        if message.from_user and message.from_user.id != config.admin_id:
-            await message.answer("Недостаточно прав")
-            return
-        await service.set_paused(True)
-        await message.answer("Пауза включена")
-
-    @router.message(F.text == "Резюме")
-    async def resume_cmd(message: Message) -> None:
-        if message.from_user and message.from_user.id != config.admin_id:
-            await message.answer("Недостаточно прав")
-            return
-        await service.set_paused(False)
-        await message.answer("Пауза отключена")
-
-    @router.message(F.text.in_(["📰 Написать новость", "/write_news"]))
+    @router.message(F.text == "📰 Написать новость")
     async def write_news_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(WriteNewsState.waiting_text)
         await message.answer("Отправьте текст/медиа новости. Нужен хештег страны (#OBS / #OB / #VL и т.д.)")
@@ -324,14 +339,19 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not text and not (message.photo or message.video or message.animation):
             await message.answer("Пустой текст")
             return
-        if "#" not in text:
-            await message.answer("Нужен хештег страны (пример: #OBS).")
+        final_tag = _extract_final_hashtag(text)
+        if not final_tag:
+            await message.answer("Нужен хештег страны в конце новости (пример: #OBS).")
             return
 
-        claimed_country = _detect_claimed_country(text)
-        if claimed_country == "MANUAL":
+        normalized_tag = _normalize_single_hashtag(final_tag)
+        claimed_country = _country_by_hashtag(normalized_tag)
+        if not claimed_country:
             await message.answer("Не найден валидный хештег страны.")
             return
+
+        if normalized_tag != final_tag.upper():
+            text = re.sub(r"#[A-Za-zА-Яа-я0-9_]+\s*$", normalized_tag, text.strip())
 
         user_id = message.from_user.id if message.from_user else 0
         if not _is_author_allowed_for_country(claimed_country, user_id):
@@ -353,10 +373,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await state.clear()
         await message.answer("Принято в очередь")
 
-    @router.message(F.text == "Планировать новость")
-    async def schedule_news_cmd(message: Message, state: FSMContext) -> None:
-        await state.set_state(ScheduleState.waiting_payload)
-        await message.answer("Формат: YYYY-mm-dd HH:MM | COUNTRY | TEXT")
 
     @router.message(ScheduleState.waiting_payload)
     async def schedule_news_flow(message: Message, state: FSMContext) -> None:
@@ -370,45 +386,10 @@ def bind_admin_handlers(service: NewsService) -> Router:
         except Exception:
             await message.answer("Неверный формат. Пример: 2026-02-21 19:30 | Вилония | Текст")
 
-    @router.message(F.text == "Emoji reload")
-    async def emoji_reload_cmd(message: Message) -> None:
-        if message.from_user and message.from_user.id != config.admin_id:
-            await message.answer("Недостаточно прав")
-            return
-        count = await service.refresh_emoji_packs()
-        await message.answer(f"Emoji packs reloaded: {count}")
 
-    @router.message(F.text == "Emoji list")
-    async def emoji_list_cmd(message: Message) -> None:
-        if not service.pack_emoji_cache:
-            await message.answer("Emoji cache пуст. Используйте /emoji_reload")
-            return
-        sample = list(service.pack_emoji_cache.items())[:50]
-        await message.answer("\n".join([f"{k} -> {v}" for k, v in sample]))
 
-    @router.message(F.text.startswith("RSS добавить "))
-    async def rss_add_cmd(message: Message) -> None:
-        if not message.text:
-            return
-        parts = message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await message.answer("Использование: /rss_add KEY https://feed.url")
-            return
-        key, url = parts[1], parts[2]
-        config.rss_feeds[key] = url
-        await message.answer(f"RSS добавлен: {key}")
 
-    @router.message(F.text == "RSS список")
-    async def rss_list_cmd(message: Message) -> None:
-        if not config.rss_feeds:
-            await message.answer("RSS пуст")
-            return
-        await message.answer("\n".join([f"{k}: {u}" for k, u in config.rss_feeds.items()]))
 
-    @router.message(F.text == "Отправить карту")
-    async def submit_map_cmd(message: Message, state: FSMContext) -> None:
-        await state.set_state(MapState.waiting_media)
-        await message.answer("Отправьте фото/файл карты и подпись комментария.")
 
     @router.message(MapState.waiting_media)
     async def submit_map_flow(message: Message, state: FSMContext) -> None:
@@ -456,19 +437,15 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer("Отклонено" if action != "war_block" else "Классифицировано как военные действия: отклонено")
 
 
-    @router.message(F.from_user.as_("u"), F.text.startswith("/"))
-    async def antiflood_command_guard(message: Message, u) -> None:  # type: ignore[no-redef]
-        if not u:
+    @router.message(F.text)
+    async def antiflood_news_guard(message: Message, state: FSMContext) -> None:
+        text = (message.text or "").strip()
+        current_state = await state.get_state()
+        if not _is_news_submission(text, current_state):
             return
-        ok, reason = await service.check_antiflood(u.id)
-        if not ok:
-            await message.answer(reason)
-
-    @router.message(F.from_user.as_("u"), F.text, ~F.text.startswith("/"))
-    async def antiflood_guard(message: Message, u) -> None:  # type: ignore[no-redef]
-        if not u:
+        if not message.from_user:
             return
-        ok, reason = await service.check_antiflood(u.id)
+        ok, reason = await service.check_antiflood(message.from_user.id)
         if not ok:
             await message.answer(reason)
 

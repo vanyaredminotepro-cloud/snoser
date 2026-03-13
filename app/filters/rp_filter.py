@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class FilterResult:
     allowed: bool
     reason: str
+    details: str = ""
 
 
 class RPFilter:
@@ -72,36 +73,36 @@ class RPFilter:
         words = self._words(low)
 
         if self._contains_banned_alliance_name(low):
-            return FilterResult(False, "BANNED_ALLIANCE_NAME")
+            return FilterResult(False, "BANNED_ALLIANCE_NAME", "обнаружено запрещённое/маскируемое название")
 
         if any(phrase in low for phrase in self.ooc_phrases) or self._contains_root(words, self.ooc_roots):
-            return FilterResult(False, "OOC_META_CONTENT")
+            return FilterResult(False, "OOC_META_CONTENT", "обнаружены OOC/meta маркеры")
 
         if self._contains_root(words, self.real_world_roots):
-            return FilterResult(False, "REAL_WORLD_CONTENT")
+            return FilterResult(False, "REAL_WORLD_CONTENT", "обнаружены упоминания реального мира")
 
         if known_countries:
             declared_terms = self._extract_declared_country_terms(low)
             for declared in declared_terms:
                 if declared not in known_countries:
-                    return FilterResult(False, "UNKNOWN_COUNTRY_MENTIONED")
+                    return FilterResult(False, "UNKNOWN_COUNTRY_MENTIONED", f"неизвестная страна: {declared}")
 
         if len(words) < 4:
-            return FilterResult(False, "TOO_SHORT_OR_NO_RP_EVENT")
+            return FilterResult(False, "TOO_SHORT_OR_NO_RP_EVENT", "слишком короткий текст без RP-контекста")
 
         if self._contains_root(words, self.military_roots):
             max_army = self._max_army_size(low)
             if max_army > 200:
-                return FilterResult(False, "ARMY_LIMIT_EXCEEDED_200")
+                return FilterResult(False, "ARMY_LIMIT_EXCEEDED_200", "численность армии выше допустимой")
             if max_army and max_army < 50:
-                return FilterResult(False, "ARMY_UNREALISTIC_TOO_SMALL")
+                return FilterResult(False, "ARMY_UNREALISTIC_TOO_SMALL", "нереалистично малая численность армии")
             if self._contains_root(words, self.direct_war_action_roots):
-                return FilterResult(False, "WAR_ACTIONS_BLOCKED")
+                return FilterResult(False, "WAR_ACTIONS_BLOCKED", "описаны прямые боевые действия")
             if self._contains_root(words, self.operation_without_war_roots):
                 return FilterResult(True, "MILITARY_OPERATION_REVIEW")
-            return FilterResult(False, "WAR_WITHOUT_RP_PROCESS")
+            return FilterResult(True, "MILITARY_WEAK_CONTEXT")
 
         if not self._contains_root(words, self.allow_roots):
-            return FilterResult(False, "NOT_RP_NEWS_ALLOWLIST")
+            return FilterResult(False, "NOT_RP_NEWS_ALLOWLIST", "нет RP-действия/контекста")
 
         return FilterResult(True, "ALLOWED")

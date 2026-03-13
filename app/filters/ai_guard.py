@@ -7,6 +7,7 @@ class AIGuardResult:
     allowed: bool
     reason: str
     score: int
+    details: str = ""
 
 
 class AIGuard:
@@ -39,9 +40,18 @@ class AIGuard:
         leet = self._leet_normalize(normalized)
         score = 0
 
-        if any(token in low or token.replace(".", "") in normalized or token.replace(".", "") in leet for token in self.toxic_tokens):
+        toxic_hit = next(
+            (
+                token
+                for token in self.toxic_tokens
+                if token in low or token.replace(".", "") in normalized or token.replace(".", "") in leet
+            ),
+            None,
+        )
+        if toxic_hit:
             score += 100
-        if any(token in low for token in self.non_rp_tokens):
+        non_rp_hit = next((token for token in self.non_rp_tokens if token in low), None)
+        if non_rp_hit:
             score += 60
         if any(phrase in low for phrase in self.suspicious_phrases):
             score += 100
@@ -51,5 +61,6 @@ class AIGuard:
             score += 10
 
         if score >= 80:
-            return AIGuardResult(False, "AI_GUARD_TOXIC_OR_NON_RP", score)
+            details = toxic_hit or non_rp_hit or "токсичный/OOC фрагмент"
+            return AIGuardResult(False, "AI_GUARD_TOXIC_OR_NON_RP", score, details=details)
         return AIGuardResult(True, "AI_GUARD_OK", score)

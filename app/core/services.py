@@ -67,8 +67,39 @@ class NewsService:
             "REAL_WORLD_CONTENT": "Обнаружены упоминания реального мира.",
             "BANNED_ALLIANCE_NAME": "Обнаружено запрещённое название/маскировка.",
             "WAR_WITHOUT_RP_PROCESS": "Военная тематика без допустимого RP-процесса.",
+            "TOO_SHORT_OR_NO_RP_EVENT": "Слишком короткий текст без RP-события.",
+            "MILITARY_WEAK_CONTEXT": "Военная новость без деталей — опубликована с предупреждением.",
         }
         return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
+
+    @staticmethod
+    def _extract_special_markers(text: str) -> tuple[str, str]:
+        markers = {
+            "#РП": "👑",
+            "#НРП": "⭐️",
+            "#НОВЫЕВВЕДЕНИЯ": "🔄",
+            "#КАРТА": "🌐",
+            "#MAP": "🌐",
+            "#NAMEMAP": "❓",
+            "#ALMAP": "👀",
+            "#ТЕРАКТ": "⚠️",
+            "#MKS20": "❄️",
+            "#MKS40": "⚠️",
+        }
+        normalized_markers = {k.upper(): v for k, v in markers.items()}
+        parts = text.split()
+        kept_parts: list[str] = []
+        found: list[str] = []
+        for part in parts:
+            marker_emoji = normalized_markers.get(part.upper())
+            if marker_emoji:
+                emoji = marker_emoji
+                if emoji not in found:
+                    found.append(emoji)
+                continue
+            kept_parts.append(part)
+        cleaned = " ".join(kept_parts).strip()
+        return cleaned, (" ".join(found) if found else "")
 
     def _render_post(self, post: IncomingPost, text: str) -> tuple[str, list]:
         rewritten = self.formatter.rewrite(post.source_country, text)
@@ -229,12 +260,18 @@ class NewsService:
         translated = await self.translator.to_russian(source_text) if source_text else ""
         corrected = autocorrect_news_text(strip_emojis(translated or source_text))
         corrected = self._summarize_if_huge(post, corrected)
+        corrected, marker_line = self._extract_special_markers(corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
             logger.info("Blocked by AI guard %s (score=%s): %s/%s", ai_result.reason, ai_result.score, post.source_channel, post.message_id)
             if post.submitted_by_user_id:
-                await self.bot.send_message(post.submitted_by_user_id, "Новость не выложена: обнаружен токсичный/OOC контент. Отредактируйте текст по правилам и отправьте заново.")
+                await self.bot.send_message(
+                    post.submitted_by_user_id,
+                    "Новость не выложена: обнаружен токсичный/OOC контент. "
+                    f"Проблемный фрагмент: {ai_result.details or 'не определён'}. "
+                    "Отредактируйте текст по правилам и отправьте заново.",
+                )
             if post.has_media:
                 await self.send_to_moderation(post, corrected or "[MEDIA]", ai_result.reason, raw_text=corrected)
             return
@@ -247,6 +284,7 @@ class NewsService:
                 await self.bot.send_message(
                     post.submitted_by_user_id,
                     f"Новость не выложена. Причина: {self._reject_reason_text(filter_result.reason)}\n"
+                    f"Где ошибка: {filter_result.details or 'проверьте формулировку новости'}\n"
                     "Проверьте формулировки, исправьте ошибки и опубликуйте снова.",
                 )
             if post.has_media:
@@ -254,10 +292,15 @@ class NewsService:
             return
 
         formatted, entities = self._render_post(post, corrected)
+        if marker_line:
+            formatted = f"{formatted}\n{marker_line}"
 
         if filter_result.reason == "MILITARY_OPERATION_REVIEW":
             await self.send_to_moderation(post, formatted, "MILITARY_REQUIRES_ADMIN_CLASSIFICATION", review_mode="war", raw_text=corrected)
             return
+
+        if filter_result.reason == "MILITARY_WEAK_CONTEXT":
+            formatted = f"{formatted}\n⚠️ Контекст военной новости краткий"
 
         if post.has_media:
             await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL", raw_text=corrected)
