@@ -40,6 +40,10 @@ class RPFilter:
         "мобилизац", "оборон", "училищ", "готовност", "патрул", "спецназ",
     }
 
+    action_roots = {
+        "начал", "начина", "провод", "запуска", "сообщ", "объяв", "ввод", "созда", "откры", "усили", "расшир",
+    }
+
     real_world_roots = {"росси", "украин", "нато", "сша", "евросоюз", "пути", "байден", "ww2"}
 
     banned_alliance_tokens = {
@@ -53,6 +57,11 @@ class RPFilter:
     @staticmethod
     def _contains_root(words: list[str], roots: set[str]) -> bool:
         return any(any(word.startswith(root) for root in roots) for word in words)
+
+    @staticmethod
+    def _sentence_count(text: str) -> int:
+        chunks = [x for x in re.split(r"[.!?]+", text) if x.strip()]
+        return len(chunks)
 
     @staticmethod
     def _max_army_size(text: str) -> int:
@@ -87,7 +96,7 @@ class RPFilter:
                 if declared not in known_countries:
                     return FilterResult(False, "UNKNOWN_COUNTRY_MENTIONED", f"неизвестная страна: {declared}")
 
-        if len(words) < 4:
+        if len(words) < 3:
             return FilterResult(False, "TOO_SHORT_OR_NO_RP_EVENT", "слишком короткий текст без RP-контекста")
 
         if self._contains_root(words, self.military_roots):
@@ -101,6 +110,9 @@ class RPFilter:
             if self._contains_root(words, self.operation_without_war_roots):
                 return FilterResult(True, "MILITARY_OPERATION_REVIEW")
             return FilterResult(True, "MILITARY_WEAK_CONTEXT")
+
+        if self._contains_root(words, self.action_roots) and self._sentence_count(low) >= 1:
+            return FilterResult(True, "ALLOWED")
 
         if not self._contains_root(words, self.allow_roots):
             return FilterResult(False, "NOT_RP_NEWS_ALLOWLIST", "нет RP-действия/контекста")

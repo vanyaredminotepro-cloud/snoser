@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -20,14 +19,6 @@ router = Router(name="admin")
 
 class WriteNewsState(StatesGroup):
     waiting_text = State()
-
-
-class ScheduleState(StatesGroup):
-    waiting_payload = State()
-
-
-class MapState(StatesGroup):
-    waiting_media = State()
 
 
 class RegistrationState(StatesGroup):
@@ -48,21 +39,6 @@ def _extract_media(message: Message) -> tuple[str | None, str | None]:
     if message.document:
         return message.document.file_id, "document"
     return None, None
-
-
-def _extract_hashtags(text: str) -> set[str]:
-    return {f"#{m.upper()}" for m in re.findall(r"#([A-Za-zА-Яа-я0-9_]+)", text)}
-
-
-def _detect_claimed_country(text: str) -> str:
-    tags = _extract_hashtags(text)
-    for country, country_tags in config.country_hashtags.items():
-        upper_tags = {tag.upper() for tag in country_tags}
-        if tags & upper_tags:
-            return country
-    return "MANUAL"
-
-
 
 
 def _normalize_hashtags_to_english(text: str) -> str:
@@ -228,7 +204,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer(f"Emoji packs reloaded: {count}")
 
     @router.message(F.text == "📝 Анкета / создать страну")
-    @router.message(F.text == "Создать страну")
     async def anketa_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
@@ -372,33 +347,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await service.enqueue(post)
         await state.clear()
         await message.answer("Принято в очередь")
-
-
-    @router.message(ScheduleState.waiting_payload)
-    async def schedule_news_flow(message: Message, state: FSMContext) -> None:
-        raw = (message.text or "").strip()
-        try:
-            at_str, country, text = [x.strip() for x in raw.split("|", maxsplit=2)]
-            ts = int(datetime.strptime(at_str, "%Y-%m-%d %H:%M").timestamp())
-            post_id = await service.db.add_scheduled_post(ts, country, text, message.from_user.id if message.from_user else 0)
-            await message.answer(f"Запланировано: id={post_id}")
-            await state.clear()
-        except Exception:
-            await message.answer("Неверный формат. Пример: 2026-02-21 19:30 | Вилония | Текст")
-
-
-
-
-
-
-    @router.message(MapState.waiting_media)
-    async def submit_map_flow(message: Message, state: FSMContext) -> None:
-        file_id, media_type = _extract_media(message)
-        comment = (message.caption or message.text or "Военная сводка").strip()
-        await service.publish_map_digest(file_id, media_type or "none", comment)
-        await message.answer("Карта и сводка опубликованы")
-        await state.clear()
-
     @router.callback_query(F.data.startswith("mod:"))
     async def moderation_callback(callback: CallbackQuery) -> None:
         if callback.from_user.id != config.admin_id:

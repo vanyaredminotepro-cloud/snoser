@@ -205,10 +205,8 @@ python -m app.main
 
 
 ## New operational features
-- `/schedule_news` — schedule delayed publication (`YYYY-mm-dd HH:MM | COUNTRY | TEXT`).
-- `/rss_add KEY URL` and `/rss_list` — runtime RSS integration.
-- `/submit_map` — publishes a map digest (photo/file + auto-styled war summary).
-- Media from `/write_news` goes to admin moderation and is published only after approval.
+- Публикация запускается через кнопку «📰 Написать новость»; если есть медиа, пост отправляется в админ-модерацию и публикуется после одобрения.
+- RSS интеграция остаётся runtime-функцией через конфиг `config.rss_feeds`.
 - Anti-flood guard with temporary account blocking when user exceeds message rate.
 - War posts are allowed only with RP-process wording and army-size sanity checks (50..200).
 - Aggressive log rotation: 1KB log chunks + spam dedup filter.
@@ -224,6 +222,5 @@ The IDs are configured in `app/config.py` under `premium_emoji_ids`.
 
 Для загрузки паков как "стикеров" используйте:
 - `emoji_packs` в `app/config.py` (ссылки `https://t.me/addemoji/...`),
-- команду `/emoji_reload` (перезагрузка и кэш в `app/storage/emojis.json`),
-- команду `/emoji_list` (просмотр первых ID из кэша).
-- По умолчанию подключён только `NewsEmoji`; если у вас другие паки, добавьте их ссылки в `config.emoji_packs` и выполните `/emoji_reload`.
+- кнопку `Emoji reload` в админ-панели (перезагрузка и кэш в `app/storage/emojis.json`).
+- По умолчанию подключён только `NewsEmoji`; если у вас другие паки, добавьте их ссылки в `config.emoji_packs` и нажмите `Emoji reload`.

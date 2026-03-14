@@ -87,18 +87,18 @@ class NewsService:
             "#MKS40": "⚠️",
         }
         normalized_markers = {k.upper(): v for k, v in markers.items()}
-        parts = text.split()
-        kept_parts: list[str] = []
         found: list[str] = []
-        for part in parts:
-            marker_emoji = normalized_markers.get(part.upper())
-            if marker_emoji:
-                emoji = marker_emoji
+        cleaned = text
+        for marker, emoji in normalized_markers.items():
+            pattern = re.compile(rf"(?i)(?<!\w){re.escape(marker)}(?!\w)(?:[,.;:!?])?")
+            if pattern.search(cleaned):
                 if emoji not in found:
                     found.append(emoji)
-                continue
-            kept_parts.append(part)
-        cleaned = " ".join(kept_parts).strip()
+                cleaned = pattern.sub("", cleaned)
+        cleaned = re.sub(r"\(\s*\)", "", cleaned)
+        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"([,.;:!?]){2,}", r"\1", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" \n\t,;.")
         return cleaned, (" ".join(found) if found else "")
 
     def _render_post(self, post: IncomingPost, text: str) -> tuple[str, list]:
@@ -385,33 +385,6 @@ class NewsService:
                 await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
         else:
             await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
-
-    async def register_war_event(self, text: str) -> None:
-        counter = int(await self.db.get_state("war_event_counter", "0")) + 1
-        await self.db.set_state("war_event_counter", str(counter))
-        await self.db.set_state(f"war_event_last:{counter}", text[:700])
-
-        last_request = int(await self.db.get_state("map_request_last_ts", "0"))
-        now = int(time.time())
-        if counter >= config.war_digest_threshold and now - last_request >= config.map_request_cooldown_minutes * 60:
-            await self.db.set_state("map_request_last_ts", str(now))
-            await self.db.set_state("war_event_counter", "0")
-            await self.bot.send_message(
-                config.admin_id,
-                "Накоплены военные события. Пришлите карту командой /submit_map с фото/файлом и подписью.",
-            )
-
-    async def publish_map_digest(self, file_id: str | None, media_type: str, comment: str) -> None:
-        title = f"Сводка: {comment[:120]}"
-        if self.user_client and file_id:
-            await self.user_client.send_file(config.target_channel, file=file_id, caption=title)
-            return
-        if media_type == "photo" and file_id:
-            await self.bot.send_photo(config.target_channel, file_id, caption=title)
-        elif media_type == "document" and file_id:
-            await self.bot.send_document(config.target_channel, file_id, caption=title)
-        else:
-            await self.bot.send_message(config.target_channel, title)
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))
