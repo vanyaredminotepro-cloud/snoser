@@ -6,6 +6,9 @@ COMMON_FIXES = {
     "строет": "строит",
     "постродавшим": "пострадавшим",
     "спецального": "специального",
+    "объявляется о": "объявляет о",
+    "проводяться": "проводятся",
+    "треня": "тренировка",
 }
 
 EMOJI_RE = re.compile(
@@ -45,6 +48,8 @@ def autocorrect_news_text(text: str) -> str:
     fixed = text.strip()
     for bad, good in COMMON_FIXES.items():
         fixed = re.sub(rf"(?i)\b{re.escape(bad)}\b", good, fixed)
+
+    fixed = re.sub(r"(?i)\b([А-ЯA-ZЁ][а-яa-zё\-]+)\s+объявляется\b", r"\1 объявляет", fixed)
 
     fixed = re.sub(r"\s+,", ",", fixed)
     fixed = re.sub(r"\s+\.", ".", fixed)

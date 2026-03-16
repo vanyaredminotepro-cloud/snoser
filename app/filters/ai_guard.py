@@ -49,7 +49,7 @@ class AIGuard:
             None,
         )
         if toxic_hit:
-            score += 100
+            score += 200
         non_rp_hit = next((token for token in self.non_rp_tokens if token in low), None)
         if non_rp_hit:
             score += 60
@@ -60,7 +60,7 @@ class AIGuard:
         if re.search(r"[A-ZА-Я]{6,}", text):
             score += 10
 
-        if score >= 80:
+        if score >= 80 or toxic_hit is not None:
             details = toxic_hit or non_rp_hit or "токсичный/OOC фрагмент"
             return AIGuardResult(False, "AI_GUARD_TOXIC_OR_NON_RP", score, details=details)
         return AIGuardResult(True, "AI_GUARD_OK", score)

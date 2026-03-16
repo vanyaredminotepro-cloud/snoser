@@ -68,7 +68,7 @@ class NewsService:
             "BANNED_ALLIANCE_NAME": "Обнаружено запрещённое название/маскировка.",
             "WAR_WITHOUT_RP_PROCESS": "Военная тематика без допустимого RP-процесса.",
             "TOO_SHORT_OR_NO_RP_EVENT": "Слишком короткий текст без RP-события.",
-            "MILITARY_WEAK_CONTEXT": "Военная новость без деталей — опубликована с предупреждением.",
+            "MILITARY_WEAK_CONTEXT": "Военная новость отправлена на модерацию.",
         }
         return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
 
@@ -163,11 +163,7 @@ class NewsService:
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
         now = int(time.time())
         if await self.db.is_user_blocked(user_id, now):
-            vio = await self.db.get_user_violation(user_id)
-            blocked_until = vio[1] if vio else now + 3600
-            if blocked_until - now >= 3600:
-                return False, "Вы заблокированы за спам. Обратитесь к админу @supermegaluti для разблокировки."
-            return False, "Вы получили мут на 10 минут по причине: флуд командами. Ваши команды не будут приниматься в течение мута."
+            return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
 
         window = self.user_windows.setdefault(user_id, deque())
         while window and now - window[0] > config.antiflood_window_sec:
@@ -177,8 +173,8 @@ class NewsService:
         if len(window) > config.antiflood_max_messages:
             strikes, _ = await self.db.add_strike(user_id, blocked_until_ts=now + 600)
             if strikes >= 3:
-                await self.db.add_strike(user_id, blocked_until_ts=now + 86400)
-                return False, "Вы заблокированы за спам. Обратитесь к админу @supermegaluti для разблокировки."
+                await self.db.add_strike(user_id, blocked_until_ts=2_147_483_647)
+                return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
             return False, "Вы получили мут на 10 минут по причине: флуд командами. Ваши команды не будут приниматься в течение мута."
         return True, "OK"
 
@@ -260,7 +256,7 @@ class NewsService:
         translated = await self.translator.to_russian(source_text) if source_text else ""
         corrected = autocorrect_news_text(strip_emojis(translated or source_text))
         corrected = self._summarize_if_huge(post, corrected)
-        corrected, marker_line = self._extract_special_markers(corrected)
+        corrected, _ = self._extract_special_markers(corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
@@ -292,18 +288,26 @@ class NewsService:
             return
 
         formatted, entities = self._render_post(post, corrected)
-        if marker_line:
-            formatted = f"{formatted}\n{marker_line}"
 
-        if filter_result.reason == "MILITARY_OPERATION_REVIEW":
-            await self.send_to_moderation(post, formatted, "MILITARY_REQUIRES_ADMIN_CLASSIFICATION", review_mode="war", raw_text=corrected)
+        if filter_result.reason in {"MILITARY_OPERATION_REVIEW", "MILITARY_WEAK_CONTEXT"}:
+            await self.send_to_moderation(
+                post,
+                formatted,
+                "MILITARY_REQUIRES_ADMIN_CLASSIFICATION",
+                review_mode="war",
+                raw_text=corrected,
+                suggestion="Уточните формулировки: цель, действия, участники и результат. При необходимости нажмите «Поправить».",
+            )
             return
 
-        if filter_result.reason == "MILITARY_WEAK_CONTEXT":
-            formatted = f"{formatted}\n⚠️ Контекст военной новости краткий"
-
         if post.has_media:
-            await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL", raw_text=corrected)
+            await self.send_to_moderation(
+                post,
+                formatted,
+                "MEDIA_REQUIRES_ADMIN_APPROVAL",
+                raw_text=corrected,
+                suggestion="Проверьте соответствие RP и подпись к медиа. Если нужно — нажмите «Поправить».",
+            )
             return
 
         if config.publish_delay_seconds > 0:
@@ -348,6 +352,7 @@ class NewsService:
         reason: str,
         review_mode: str = "default",
         raw_text: str | None = None,
+        suggestion: str | None = None,
     ) -> None:
         token = uuid.uuid4().hex
         payload = {
@@ -370,6 +375,7 @@ class NewsService:
             f"Причина: {reason}\n"
             f"Источник: {post.source_country} ({post.source_channel})\n"
             f"ID: {post.message_id}\n\n"
+            f"Рекомендация ИИ: {suggestion or 'Проверьте RP-логику, корректность формулировок и хештег.'}\n\n"
             f"Текст:\n{text[:3000]}"
         )
 

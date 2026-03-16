@@ -69,7 +69,7 @@ class Config:
     logs_dir: Path = Path("logs")
     emoji_storage_path: Path = Path("app/storage/emojis.json")
 
-    antiflood_window_sec: int = 20
+    antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
     scheduler_poll_seconds: int = 5
     rss_poll_seconds: int = 45

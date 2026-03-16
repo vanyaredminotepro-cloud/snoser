@@ -220,3 +220,20 @@ class Database:
             cursor = await db.execute("SELECT 1 FROM country_leaders WHERE user_id = ? LIMIT 1", (user_id,))
             row = await cursor.fetchone()
         return row is not None
+
+    async def has_approved_registration(self, user_id: int, reg_type: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM registration_applications WHERE user_id = ? AND reg_type = ? AND status = 'approved' LIMIT 1",
+                (user_id, reg_type),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def news_stats(self) -> tuple[int, int, int, int]:
+        async with aiosqlite.connect(self.path) as db:
+            total = await (await db.execute("SELECT COUNT(*) FROM processed_posts")).fetchone()
+            day = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-1 day')")).fetchone()
+            week = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-7 day')")).fetchone()
+            month = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-30 day')")).fetchone()
+        return int(day[0]), int(week[0]), int(month[0]), int(total[0])

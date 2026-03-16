@@ -27,6 +27,8 @@ class RegistrationState(StatesGroup):
 
 class AdminState(StatesGroup):
     waiting_registration_reject_reason = State()
+    waiting_moderation_fix = State()
+    waiting_appeal = State()
 
 
 def _extract_media(message: Message) -> tuple[str | None, str | None]:
@@ -86,6 +88,25 @@ def _is_author_allowed_for_country(country: str, user_id: int) -> bool:
     return user_id in allowed_ids or user_id == config.admin_id
 
 
+def _user_allowed_countries(user_id: int) -> list[str]:
+    if user_id == config.admin_id:
+        return []
+    return [country for country, ids in config.manual_country_authors.items() if user_id in ids]
+
+
+def _apply_admin_fix(raw_text: str, instructions: str) -> str:
+    fixed = raw_text
+    for chunk in instructions.split(";"):
+        if "->" not in chunk:
+            continue
+        old, new = [x.strip() for x in chunk.split("->", maxsplit=1)]
+        if old:
+            fixed = fixed.replace(old, new)
+    if fixed == raw_text:
+        return instructions.strip() or raw_text
+    return fixed
+
+
 REG_TYPE_LABELS = {
     "person": "Известный человек",
     "group": "Группировка",
@@ -130,6 +151,7 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Статус", callback_data="admin:status")],
+            [InlineKeyboardButton(text="Статистика новостей", callback_data="admin:news_stats")],
             [InlineKeyboardButton(text="Пауза", callback_data="admin:pause"), InlineKeyboardButton(text="Резюме", callback_data="admin:resume")],
             [InlineKeyboardButton(text="Написать новость", callback_data="admin:write_news")],
             [InlineKeyboardButton(text="Анкеты", callback_data="admin:anketa")],
@@ -156,6 +178,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
         rows = [
             [KeyboardButton(text="📰 Написать новость")],
             [KeyboardButton(text="📝 Анкета / создать страну")],
+            [KeyboardButton(text="📊 Статистика")],
+            [KeyboardButton(text="🧾 Оспорить отклонение")],
         ]
         if message.from_user and message.from_user.id == config.admin_id:
             rows.append([KeyboardButton(text="⚙️ Админ-панель")])
@@ -188,6 +212,11 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if action == "status":
             paused = await service.is_paused()
             await callback.message.answer(f"Статус: {'PAUSED' if paused else 'RUNNING'}\nОчередь: {service.queue.qsize()}")
+        elif action == "news_stats":
+            day, week, month, total = await service.db.news_stats()
+            await callback.message.answer(
+                f"Статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
+            )
         elif action == "pause":
             await service.set_paused(True)
             await callback.message.answer("Пауза включена")
@@ -208,9 +237,39 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await state.clear()
         await message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
 
+    @router.message(F.text == "📊 Статистика")
+    async def user_stats_menu(message: Message) -> None:
+        day, week, month, total = await service.db.news_stats()
+        await message.answer(
+            f"Общая статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
+        )
+
+    @router.message(F.text == "🧾 Оспорить отклонение")
+    async def appeal_start(message: Message, state: FSMContext) -> None:
+        await state.set_state(AdminState.waiting_appeal)
+        await message.answer("Отправьте текст апелляции одним сообщением. Мы перешлём админу.")
+
+    @router.message(AdminState.waiting_appeal)
+    async def appeal_flow(message: Message, state: FSMContext) -> None:
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("Текст апелляции пуст.")
+            return
+        user = message.from_user
+        await message.bot.send_message(
+            config.admin_id,
+            f"Апелляция от пользователя\nID: {user.id if user else 0}\n"
+            f"Username: @{user.username if user and user.username else 'none'}\n\n{text[:3500]}",
+        )
+        await message.answer("Апелляция отправлена админу.")
+        await state.clear()
+
     @router.callback_query(F.data.startswith("reg:"))
     async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
         _, reg_type = callback.data.split(":", maxsplit=1)
+        if await service.db.has_approved_registration(callback.from_user.id, reg_type):
+            await callback.answer("Вы уже зарегистрированы в этой категории.", show_alert=True)
+            return
         if reg_type in {"movement", "party"}:
             if await service.db.is_country_leader(callback.from_user.id):
                 await callback.answer("Недоступно: у вас уже есть страна/группировка.", show_alert=True)
@@ -330,7 +389,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
         user_id = message.from_user.id if message.from_user else 0
         if not _is_author_allowed_for_country(claimed_country, user_id):
-            await message.answer("Вы не можете публиковать новости от лица этой страны.")
+            allowed = _user_allowed_countries(user_id)
+            if allowed:
+                tags = ", ".join(config.country_hashtags.get(allowed[0], ["#RP"]))
+                await message.answer(f"Вы не можете публиковать новости от лица этой страны. Твой настоящий хештег: {tags}")
+            else:
+                await message.answer("Вы не можете публиковать новости от лица этой страны.")
             return
 
         file_id, media_type = _extract_media(message)
@@ -348,7 +412,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await state.clear()
         await message.answer("Принято в очередь")
     @router.callback_query(F.data.startswith("mod:"))
-    async def moderation_callback(callback: CallbackQuery) -> None:
+    async def moderation_callback(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -373,16 +437,70 @@ def bind_admin_handlers(service: NewsService) -> Router:
             submitted_by_user_id=payload.get("submitted_by_user_id"),
         )
 
-        if action in {"approve", "war_ok"}:
+        if action == "approve":
             if post.has_media:
                 await service.publish_media_and_mark(post, payload["formatted_text"], hash_value)
             else:
                 formatted, entities = service._render_post(post, post.text)
                 await service.publish_and_mark(post, formatted, entities, hash_value)
-            await callback.message.answer("Одобрено и опубликовано" if action == "approve" else "Классифицировано как операция без ВД: опубликовано")
-        else:
+            await callback.message.answer("Одобрено и опубликовано")
+            return
+
+        if action == "edit":
+            await state.set_state(AdminState.waiting_moderation_fix)
+            await state.update_data(mod_token=token, mod_payload=payload)
+            await callback.message.answer(
+                "Напиши, что нужно исправить.\n"
+                "Формат: старое -> новое; старое2 -> новое2\n"
+                "Или отправь полностью исправленный текст."
+            )
+            return
+
+        if action == "reject":
             await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
-            await callback.message.answer("Отклонено" if action != "war_block" else "Классифицировано как военные действия: отклонено")
+            await callback.message.answer("Отклонено")
+            return
+
+        if action == "war_block":
+            await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await callback.message.answer("Классифицировано как военные действия: отклонено")
+            return
+
+    @router.message(AdminState.waiting_moderation_fix)
+    async def moderation_fix_flow(message: Message, state: FSMContext) -> None:
+        if not message.from_user or message.from_user.id != config.admin_id:
+            return
+        data = await state.get_data()
+        payload = data.get("mod_payload")
+        if not isinstance(payload, dict):
+            await message.answer("Не найден payload модерации. Повторите действие.")
+            await state.clear()
+            return
+
+        raw_text = str(payload.get("raw_text") or payload.get("formatted_text") or "")
+        instruction = (message.text or "").strip()
+        fixed_text = _apply_admin_fix(raw_text, instruction)
+
+        post = IncomingPost(
+            source_country=payload["source_country"],
+            source_channel=payload["source_channel"],
+            message_id=payload["message_id"],
+            text=fixed_text,
+            has_media=payload.get("has_media", False),
+            media_file_id=payload.get("media_file_id"),
+            media_type=payload.get("media_type"),
+            submitted_by_user_id=payload.get("submitted_by_user_id"),
+        )
+        hash_value = payload.get("hash_value") or content_hash(f"{post.source_channel}:{post.message_id}:{fixed_text}")
+
+        if post.has_media:
+            formatted, _ = service._render_post(post, fixed_text)
+            await service.publish_media_and_mark(post, formatted, hash_value)
+        else:
+            formatted, entities = service._render_post(post, fixed_text)
+            await service.publish_and_mark(post, formatted, entities, hash_value)
+        await message.answer("Исправлено и опубликовано.")
+        await state.clear()
 
 
     @router.message(F.text)
