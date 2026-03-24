@@ -21,10 +21,18 @@ async def main() -> None:
 
     db = Database(str(config.sqlite_path))
     await db.init()
+    seeded = await db.seed_country_leaders(config.manual_country_authors)
+    logger.info("Country leaders seeded from config: %s", seeded)
 
-    runtime = AppRuntime()
+    try:
+        runtime = AppRuntime()
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        logger.error("Configure environment variables (or .env) and restart the bot.")
+        return
+
     service = NewsService(runtime.bot, db)
-
+    await service.load_dynamic_config()
     await runtime.run(service)
 
 

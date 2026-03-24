@@ -1,12 +1,62 @@
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
+from typing import Iterable, Optional
+
+
+def _load_dotenv_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", maxsplit=1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _load_dotenv_if_present(paths: Optional[Iterable[Path]] = None) -> None:
+    candidates = list(paths or [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ])
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        _load_dotenv_file(resolved)
+
+def _first_present_env(*names: str) -> Optional[str]:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _optional_env_int(*names: str) -> Optional[int]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
 @dataclass(slots=True)
 class Config:
-    api_id: int = 23695534
-    api_hash: str = "08f5b069bb4fd8505b98a6b57f857868"
-    bot_token: str = "8559159012:AAEz0BgKDRgRYFfCcXDf5VNrpS2uVp-mwCo"
+    api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
+    api_hash: Optional[str] = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
+    bot_token: Optional[str] = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
     admin_id: int = 5006629901
     admin_username: str = "@supermegaluti"
@@ -19,7 +69,7 @@ class Config:
     logs_dir: Path = Path("logs")
     emoji_storage_path: Path = Path("app/storage/emojis.json")
 
-    antiflood_window_sec: int = 20
+    antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
     scheduler_poll_seconds: int = 5
     rss_poll_seconds: int = 45
@@ -31,11 +81,13 @@ class Config:
             "Антония": "antoniats",
             "Вилония": "Viloniarp",
             "ТНР": "NARallies",
+            "ОСР": "OSRres",
             "Олбония": "olbonia",
             "Северландия": "severlandia",
             "Обоссляндия": "obosslandia",
             "Зитор": "Zitorchik",
             "Сэрландия": "NewSerland",
+            "ДШРГ Торнадо": "DSHRGTornado",
             'ЧВК "Компф"': "PMC_Kompf",
             'Орден "ГНЕВ"': "gnevto",
             "Лорд-протекторат": "Lord_Protektorat",
@@ -62,9 +114,8 @@ class Config:
 
     emoji_packs: dict[str, str] = field(
         default_factory=lambda: {
-            "flaerium": "https://t.me/addemoji/Flaerium",
-            "premium_flowers": "https://t.me/addemoji/FlowersPremium",
-            "animals": "https://t.me/addemoji/PremiumAnimals",
+            # По умолчанию используем только подтверждённый пак.
+            "news_emoji": "https://t.me/addemoji/NewsEmoji",
         }
     )
 
@@ -103,9 +154,9 @@ class Config:
             "Олбония": ["#OB"],
             "ОВС": ["#OVS"],
             "Аборигены": ["#ABR"],
-            "ЧВК Пиран": ["#PIRAN"],
-            "Кермания": ["#KK8"],
-            "Новрания": ["#NOV"],
+            "ЧВК Пиран": ["#PIR"],
+            "Кермания": ["#KK8", "#КК8"],
+            "Новрания": ["#TNR"],
             "Коробочкия": ["#KRB"],
             "Северландия": ["#SV"],
             "Зитор": ["#ZT"],
@@ -119,13 +170,16 @@ class Config:
             "Антония": ["#AN"],
             "ТНР": ["#TNR"],
             "Крелония": ["#KRL"],
-            "Сэрландия": ["#SRL"],
+            "Сэрландия": ["#RK"],
+            "ДШРГ Торнадо": ["#TRD"],
             "Лорд-протекторат": ["#LPR"],
             "Белоярск": ["#BYR"],
-            "Аль-Нуурия": ["#ANR"],
+            "Аль-Нуурия": ["#AL"],
             'ЧВК "Компф"': ["#KMPF"],
             "Лекси": ["#LKS"],
             "Лютый": ["#LT"],
+            "РКА": ["#RKA"],
+            "Искандер": ["#ISK"],
             "MANUAL": ["#RP"],
         }
     )
@@ -136,6 +190,7 @@ class Config:
             "Олбония": ["олбони", "олбония", "королевство олбония"],
             "Вилония": ["вилония"],
             "ТНР": ["тнр"],
+            "ДШРГ Торнадо": ["дшрг торнадо", "торнадо"],
             "Новрания": ["новрания"],
             'Орден "ГНЕВ"': ["гнев", "орден гнев"],
             "Северландия": ["северландия"],
@@ -145,6 +200,26 @@ class Config:
             "ФШП": ["фшп", "пехико"],
         }
     )
+
+
+
+    def require_runtime_credentials(self) -> tuple[int, str, str]:
+        missing: list[str] = []
+        if self.api_id is None:
+            missing.append("TG_API_ID (or API_ID)")
+        if not self.api_hash:
+            missing.append("TG_API_HASH (or API_HASH)")
+        if not self.bot_token:
+            missing.append("TG_BOT_TOKEN (or BOT_TOKEN)")
+
+        if missing:
+            joined = ", ".join(missing)
+            raise RuntimeError(
+                "Telegram credentials are not configured. "
+                f"Set environment variables: {joined}."
+            )
+
+        return self.api_id, self.api_hash, self.bot_token
 
     manual_country_authors: dict[str, list[int]] = field(
         default_factory=lambda: {
@@ -163,5 +238,7 @@ class Config:
         }
     )
 
+
+_load_dotenv_if_present()
 
 config = Config()

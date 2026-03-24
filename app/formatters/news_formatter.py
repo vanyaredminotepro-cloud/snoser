@@ -1,6 +1,6 @@
 import re
 
-from telethon.tl.types import MessageEntityBold, MessageEntityCustomEmoji, MessageEntityItalic
+from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, MessageEntityCustomEmoji, MessageEntityItalic
 
 
 class NewsFormatter:
@@ -13,7 +13,6 @@ class NewsFormatter:
         "default": "👀",
     }
 
-    detail_emoji = "✔️"
 
     emoji_rules = {
         "economy": ["эконом", "бюджет", "инвест", "вкладывает", "финанс", "промышлен", "фабрик", "завод"],
@@ -135,7 +134,7 @@ class NewsFormatter:
 
         lines = [f"{emoji_char}{country} {headline}".strip()]
         if details:
-            lines.append(f"{self.detail_emoji}{details}".strip())
+            lines.append(details.strip())
 
         hashtags = self._build_hashtags(country, cleaned, country_hashtags, country_aliases)
         full_text = "\n\n".join(lines) + f"\n\n{hashtags}"
@@ -143,6 +142,9 @@ class NewsFormatter:
         entities: list = []
         # line 1 entities
         l1 = lines[0]
+
+        # quote-style rendering for the headline line
+        entities.append(MessageEntityBlockquote(offset=0, length=self._utf16_len(l1)))
         if emoji_id is not None:
             entities.append(MessageEntityCustomEmoji(offset=0, length=self._utf16_len(emoji_char), document_id=emoji_id))
 
@@ -157,7 +159,7 @@ class NewsFormatter:
             entities.append(MessageEntityItalic(offset=body_start, length=body_len))
 
         if details:
-            prefix_units = self._utf16_len(l1 + "\n\n" + self.detail_emoji)
+            prefix_units = self._utf16_len(l1 + "\n\n")
             detail_len = self._utf16_len(details)
             entities.append(MessageEntityBold(offset=prefix_units, length=detail_len))
             entities.append(MessageEntityItalic(offset=prefix_units, length=detail_len))

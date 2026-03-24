@@ -22,11 +22,24 @@ def _extract_text(msg: Message) -> str:
     return (msg.message or msg.raw_text or "").strip()
 
 
+def _extract_media_metadata(msg: Message) -> tuple[str | None, str | None]:
+    if msg.photo:
+        return str(msg.photo), "photo"
+    if msg.video:
+        return str(msg.video), "video"
+    if msg.gif:
+        return str(msg.gif), "animation"
+    if msg.document:
+        return str(msg.document), "document"
+    return None, None
+
+
 class AppRuntime:
     def __init__(self) -> None:
-        self.bot = Bot(token=config.bot_token)
+        api_id, api_hash, bot_token = config.require_runtime_credentials()
+        self.bot = Bot(token=bot_token)
         self.dispatcher = Dispatcher()
-        self.userbot = TelegramClient(config.session_name, config.api_id, config.api_hash)
+        self.userbot = TelegramClient(config.session_name, api_id, api_hash)
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
@@ -62,14 +75,16 @@ class AppRuntime:
                 return
 
             title = getattr(channel, "title", None) or getattr(channel, "username", "unknown")
+            media_file_id, media_type = _extract_media_metadata(event.message)
             post = IncomingPost(
                 source_country=country,
                 source_channel=str(getattr(channel, "username", title)),
                 message_id=event.message.id,
                 text=text,
                 has_media=bool(event.message.media),
-                media_file_id=None,
-                media_type=None,
+                media_file_id=media_file_id,
+                media_type=media_type,
+                submitted_by_user_id=None,
             )
             await service.enqueue(post)
 
@@ -118,9 +133,18 @@ async def run_from_script() -> None:
     config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(str(config.sqlite_path))
     await db.init()
+    seeded = await db.seed_country_leaders(config.manual_country_authors)
+    logger.info("Country leaders seeded from config: %s", seeded)
 
-    runtime = AppRuntime()
+    try:
+        runtime = AppRuntime()
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        logger.error("Configure environment variables (or .env) and restart the bot.")
+        return
+
     service = NewsService(runtime.bot, db)
+    await service.load_dynamic_config()
     await runtime.run(service)
 
 

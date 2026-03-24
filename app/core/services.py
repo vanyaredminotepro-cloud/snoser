@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -21,7 +22,7 @@ from app.parsers.emoji_packs import EmojiPackLoader
 from app.parsers.rss_parser import RSSParser
 from app.parsers.translator import AutoTranslator
 from app.storage.database import Database
-from app.utils.text_tools import content_hash, strip_hashtags
+from app.utils.text_tools import autocorrect_news_text, content_hash, strip_emojis, strip_hashtags
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +45,118 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    async def load_dynamic_config(self) -> None:
+        raw_tags = await self.db.get_state("cfg:country_hashtags", "")
+        raw_sources = await self.db.get_state("cfg:source_channels", "")
+        try:
+            if raw_tags:
+                loaded_tags = json.loads(raw_tags)
+                if isinstance(loaded_tags, dict):
+                    for key, value in loaded_tags.items():
+                        if isinstance(key, str) and isinstance(value, list):
+                            config.country_hashtags[key] = [str(v).upper() if str(v).startswith("#") else f"#{str(v).upper()}" for v in value]
+        except Exception:
+            logger.exception("Failed to load dynamic hashtags config")
+
+        try:
+            if raw_sources:
+                loaded_sources = json.loads(raw_sources)
+                if isinstance(loaded_sources, dict):
+                    for key, value in loaded_sources.items():
+                        if isinstance(key, str) and isinstance(value, str):
+                            config.source_channels[key] = value
+        except Exception:
+            logger.exception("Failed to load dynamic source-channels config")
+
+    @staticmethod
+    def _known_country_terms() -> set[str]:
+        terms: set[str] = set()
+        for country in config.country_hashtags.keys():
+            terms.add(country.lower())
+        for country in config.source_channels.keys():
+            terms.add(country.lower())
+        for aliases in config.country_aliases.values():
+            for alias in aliases:
+                terms.add(alias.lower())
+        return terms
+
+    @staticmethod
+    def _reject_reason_text(reason: str) -> str:
+        mapping = {
+            "WAR_ACTIONS_BLOCKED": "Обнаружены прямые военные действия (атака/обстрел/штурм).",
+            "UNKNOWN_COUNTRY_MENTIONED": "Упомянута неизвестная RP-страна.",
+            "NOT_RP_NEWS_ALLOWLIST": "Текст не похож на RP-новость по правилам.",
+            "OOC_META_CONTENT": "Обнаружен OOC/meta контент.",
+            "REAL_WORLD_CONTENT": "Обнаружены упоминания реального мира.",
+            "BANNED_ALLIANCE_NAME": "Обнаружено запрещённое название/маскировка.",
+            "WAR_WITHOUT_RP_PROCESS": "Военная тематика без допустимого RP-процесса.",
+            "TOO_SHORT_OR_NO_RP_EVENT": "Слишком короткий текст без RP-события.",
+            "MILITARY_REVIEW_REQUIRED": "Военная новость отправлена на модерацию.",
+        }
+        return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
+
+    @staticmethod
+    def _extract_special_markers(text: str) -> tuple[str, str]:
+        markers = {
+            "#РП": "👑",
+            "#НРП": "⭐️",
+            "#НОВЫЕВВЕДЕНИЯ": "🔄",
+            "#КАРТА": "🌐",
+            "#MAP": "🌐",
+            "#NAMEMAP": "❓",
+            "#ALMAP": "👀",
+            "#ТЕРАКТ": "⚠️",
+            "#MKS20": "❄️",
+            "#MKS40": "⚠️",
+        }
+        normalized_markers = {k.upper(): v for k, v in markers.items()}
+        found: list[str] = []
+        cleaned = text
+        for marker, emoji in normalized_markers.items():
+            pattern = re.compile(rf"(?i)(?<!\w){re.escape(marker)}(?!\w)(?:[,.;:!?])?")
+            if pattern.search(cleaned):
+                if emoji not in found:
+                    found.append(emoji)
+                cleaned = pattern.sub("", cleaned)
+        cleaned = re.sub(r"\(\s*\)", "", cleaned)
+        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"([,.;:!?]){2,}", r"\1", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" \n\t,;.")
+        return cleaned, (" ".join(found) if found else "")
+
+    def _render_post(self, post: IncomingPost, text: str) -> tuple[str, list]:
+        rewritten = self.formatter.rewrite(post.source_country, text)
+        return self.formatter.format_news_entities(
+            country=post.source_country,
+            text=rewritten,
+            country_hashtags=config.country_hashtags,
+            premium_emoji_ids=config.premium_emoji_ids,
+            country_aliases=config.country_aliases,
+        )
+
+    @staticmethod
+    def _source_link(post: IncomingPost) -> str | None:
+        channel = (post.source_channel or "").lstrip("@")
+        if channel and channel.replace("_", "").isalnum() and post.message_id:
+            return f"https://t.me/{channel}/{post.message_id}"
+        return None
+
+    def _summarize_if_huge(self, post: IncomingPost, text: str) -> str:
+        if len(text) <= 900:
+            return text
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        summary = " ".join(sentences[:2]).strip() or text[:400]
+        link = self._source_link(post)
+        if link:
+            return f"{summary}\n\nПолная новость: {link}"
+        return summary
+
     async def refresh_emoji_packs(self) -> int:
         if not self.user_client:
             return len(self.pack_emoji_cache)
         loaded = await self.emoji_loader.load_all(self.user_client, config.emoji_packs)
         self.pack_emoji_cache = loaded
 
-        # combo mode: config + packs. keep config first, enrich with known semantic symbols from packs.
         symbol_to_key = {
             "👀": "DEFAULT",
             "❗️": "IMPORTANT",
@@ -80,7 +186,7 @@ class NewsService:
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
         now = int(time.time())
         if await self.db.is_user_blocked(user_id, now):
-            return False, "Вы временно заблокированы за флуд"
+            return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
 
         window = self.user_windows.setdefault(user_id, deque())
         while window and now - window[0] > config.antiflood_window_sec:
@@ -88,9 +194,11 @@ class NewsService:
         window.append(now)
 
         if len(window) > config.antiflood_max_messages:
-            blocked_until = now + 300
-            strikes, _ = await self.db.add_strike(user_id, blocked_until_ts=blocked_until)
-            return False, f"Антифлуд: лимит превышен. Страйков: {strikes}. Блок на 5 минут"
+            strikes, _ = await self.db.add_strike(user_id, blocked_until_ts=now + 600)
+            if strikes >= 3:
+                await self.db.add_strike(user_id, blocked_until_ts=2_147_483_647)
+                return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
+            return False, "Вы получили мут на 10 минут по причине: флуд командами. Ваши команды не будут приниматься в течение мута."
         return True, "OK"
 
     async def worker(self) -> None:
@@ -169,42 +277,60 @@ class NewsService:
             return
 
         translated = await self.translator.to_russian(source_text) if source_text else ""
+        corrected = autocorrect_news_text(strip_emojis(translated or source_text))
+        corrected = self._summarize_if_huge(post, corrected)
+        corrected, _ = self._extract_special_markers(corrected)
 
-        ai_result = self.ai_guard.analyze(translated or source_text)
+        ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
-            logger.info(
-                "Blocked by AI guard %s (score=%s): %s/%s",
-                ai_result.reason,
-                ai_result.score,
-                post.source_channel,
-                post.message_id,
-            )
+            logger.info("Blocked by AI guard %s (score=%s): %s/%s", ai_result.reason, ai_result.score, post.source_channel, post.message_id)
+            if post.submitted_by_user_id:
+                await self.bot.send_message(
+                    post.submitted_by_user_id,
+                    "Новость не выложена: обнаружен токсичный/OOC контент. "
+                    f"Проблемный фрагмент: {ai_result.details or 'не определён'}. "
+                    "Отредактируйте текст по правилам и отправьте заново.",
+                )
             if post.has_media:
-                await self.send_to_moderation(post, translated or "[MEDIA]", ai_result.reason)
+                await self.send_to_moderation(post, corrected or "[MEDIA]", ai_result.reason, raw_text=corrected)
             return
 
-        filter_result = self.rp_filter.check(translated or "media news")
+        filter_result = self.rp_filter.check(corrected or "media news", known_countries=self._known_country_terms())
 
         if not filter_result.allowed:
             logger.info("Blocked by RP filter %s: %s/%s", filter_result.reason, post.source_channel, post.message_id)
+            if post.submitted_by_user_id:
+                await self.bot.send_message(
+                    post.submitted_by_user_id,
+                    f"Новость не выложена. Причина: {self._reject_reason_text(filter_result.reason)}\n"
+                    f"Где ошибка: {filter_result.details or 'проверьте формулировку новости'}\n"
+                    "Проверьте формулировки, исправьте ошибки и опубликуйте снова.",
+                )
             if post.has_media:
-                await self.send_to_moderation(post, translated or "[MEDIA]", filter_result.reason)
+                await self.send_to_moderation(post, corrected or "[MEDIA]", filter_result.reason, raw_text=corrected)
             return
 
-        if filter_result.reason.startswith("ALLOWED_WAR"):
-            await self.register_war_event(translated)
+        formatted, entities = self._render_post(post, corrected)
 
-        rewritten = self.formatter.rewrite(post.source_country, translated)
-        formatted, entities = self.formatter.format_news_entities(
-            country=post.source_country,
-            text=rewritten,
-            country_hashtags=config.country_hashtags,
-            premium_emoji_ids=config.premium_emoji_ids,
-            country_aliases=config.country_aliases,
-        )
+        if filter_result.reason == "MILITARY_REVIEW_REQUIRED":
+            await self.send_to_moderation(
+                post,
+                formatted,
+                "MILITARY_REQUIRES_ADMIN_CLASSIFICATION",
+                review_mode="war",
+                raw_text=corrected,
+                suggestion="Уточните формулировки: цель, действия, участники и результат. При необходимости нажмите «Поправить».",
+            )
+            return
 
         if post.has_media:
-            await self.send_to_moderation(post, formatted, "MEDIA_REQUIRES_ADMIN_APPROVAL")
+            await self.send_to_moderation(
+                post,
+                formatted,
+                "MEDIA_REQUIRES_ADMIN_APPROVAL",
+                raw_text=corrected,
+                suggestion="Проверьте соответствие RP и подпись к медиа. Если нужно — нажмите «Поправить».",
+            )
             return
 
         if config.publish_delay_seconds > 0:
@@ -242,16 +368,28 @@ class NewsService:
         except (TelegramBadRequest, RPCError):
             logger.exception("Media publish failed")
 
-    async def send_to_moderation(self, post: IncomingPost, text: str, reason: str) -> None:
+    async def send_to_moderation(
+        self,
+        post: IncomingPost,
+        text: str,
+        reason: str,
+        review_mode: str = "default",
+        raw_text: str | None = None,
+        suggestion: str | None = None,
+    ) -> None:
         token = uuid.uuid4().hex
         payload = {
             "source_country": post.source_country,
             "source_channel": post.source_channel,
             "message_id": post.message_id,
             "formatted_text": text,
+            "raw_text": raw_text or post.text,
             "has_media": post.has_media,
             "media_file_id": post.media_file_id,
             "media_type": post.media_type,
+            "submitted_by_user_id": post.submitted_by_user_id,
+            "review_mode": review_mode,
+            "hash_value": content_hash(f"{post.source_channel}:{post.message_id}:{text}"),
         }
         await self.db.store_moderation_payload(token, json.dumps(payload, ensure_ascii=False))
 
@@ -260,47 +398,22 @@ class NewsService:
             f"Причина: {reason}\n"
             f"Источник: {post.source_country} ({post.source_channel})\n"
             f"ID: {post.message_id}\n\n"
+            f"Рекомендация ИИ: {suggestion or 'Проверьте RP-логику, корректность формулировок и хештег.'}\n\n"
             f"Текст:\n{text[:3000]}"
         )
 
+        reply_markup = moderation_keyboard(token, review_mode=review_mode)
         if post.has_media and post.media_file_id:
             if post.media_type == "photo":
-                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
             elif post.media_type == "video":
-                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
             elif post.media_type == "animation":
-                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=moderation_keyboard(token))
+                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
             else:
-                await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token))
+                await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
         else:
-            await self.bot.send_message(config.admin_id, msg_text, reply_markup=moderation_keyboard(token))
-
-    async def register_war_event(self, text: str) -> None:
-        counter = int(await self.db.get_state("war_event_counter", "0")) + 1
-        await self.db.set_state("war_event_counter", str(counter))
-        await self.db.set_state(f"war_event_last:{counter}", text[:700])
-
-        last_request = int(await self.db.get_state("map_request_last_ts", "0"))
-        now = int(time.time())
-        if counter >= config.war_digest_threshold and now - last_request >= config.map_request_cooldown_minutes * 60:
-            await self.db.set_state("map_request_last_ts", str(now))
-            await self.db.set_state("war_event_counter", "0")
-            await self.bot.send_message(
-                config.admin_id,
-                "Накоплены военные события. Пришлите карту командой /submit_map с фото/файлом и подписью.",
-            )
-
-    async def publish_map_digest(self, file_id: str | None, media_type: str, comment: str) -> None:
-        title = f"Сводка: {comment[:120]}"
-        if self.user_client and file_id:
-            await self.user_client.send_file(config.target_channel, file=file_id, caption=title)
-            return
-        if media_type == "photo" and file_id:
-            await self.bot.send_photo(config.target_channel, file_id, caption=title)
-        elif media_type == "document" and file_id:
-            await self.bot.send_document(config.target_channel, file_id, caption=title)
-        else:
-            await self.bot.send_message(config.target_channel, title)
+            await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))

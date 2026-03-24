@@ -56,6 +56,29 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_leaders (
+                    country TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'runtime',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (country, user_id)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS registration_applications (
+                    token TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    reg_type TEXT NOT NULL,
+                    form_text TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             await db.commit()
 
     async def is_duplicate(self, content_hash: str) -> bool:
@@ -136,3 +159,81 @@ class Database:
             cursor = await db.execute("SELECT blocked_until_ts FROM user_violations WHERE user_id = ?", (user_id,))
             row = await cursor.fetchone()
         return bool(row and int(row[0]) > now_ts)
+
+
+    async def add_country_leader(self, country: str, user_id: int, source: str = "runtime") -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_leaders (country, user_id, source) VALUES (?, ?, ?)",
+                (country, user_id, source),
+            )
+            await db.commit()
+
+    async def seed_country_leaders(self, mapping: dict[str, list[int]]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, ids in mapping.items():
+                for user_id in ids:
+                    cursor = await db.execute(
+                        "INSERT OR IGNORE INTO country_leaders (country, user_id, source) VALUES (?, ?, 'config')",
+                        (country, int(user_id)),
+                    )
+                    inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
+
+    async def store_registration_application(self, token: str, user_id: int, reg_type: str, form_text: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO registration_applications (token, user_id, reg_type, form_text, status) VALUES (?, ?, ?, ?, 'pending')",
+                (token, user_id, reg_type, form_text),
+            )
+            await db.commit()
+
+    async def get_registration_application(self, token: str) -> tuple[int, str, str, str] | None:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT user_id, reg_type, form_text, status FROM registration_applications WHERE token = ?",
+                (token,),
+            )
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return int(row[0]), str(row[1]), str(row[2]), str(row[3])
+
+    async def set_registration_application_status(self, token: str, status: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE registration_applications SET status = ? WHERE token = ?", (status, token))
+            await db.commit()
+
+    async def get_user_violation(self, user_id: int) -> tuple[int, int] | None:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("SELECT strikes, blocked_until_ts FROM user_violations WHERE user_id = ?", (user_id,))
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return int(row[0]), int(row[1])
+
+    async def is_country_leader(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("SELECT 1 FROM country_leaders WHERE user_id = ? LIMIT 1", (user_id,))
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def has_approved_registration(self, user_id: int, reg_type: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM registration_applications WHERE user_id = ? AND reg_type = ? AND status = 'approved' LIMIT 1",
+                (user_id, reg_type),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def news_stats(self) -> tuple[int, int, int, int]:
+        async with aiosqlite.connect(self.path) as db:
+            total = await (await db.execute("SELECT COUNT(*) FROM processed_posts")).fetchone()
+            day = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-1 day')")).fetchone()
+            week = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-7 day')")).fetchone()
+            month = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-30 day')")).fetchone()
+        return int(day[0]), int(week[0]), int(month[0]), int(total[0])

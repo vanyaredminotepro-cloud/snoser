@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from telethon import TelegramClient
+from telethon.errors.rpcerrorlist import StickersetInvalidError
 from telethon.tl.functions.messages import GetStickerSetRequest
 from telethon.tl.types import InputStickerSetShortName
 
@@ -39,6 +40,9 @@ class EmojiPackLoader:
                     out[key] = int(doc.id)
             logger.info("Loaded emoji pack %s: %s items", short_name, len(out))
             return out
+        except StickersetInvalidError:
+            logger.warning("Emoji pack is invalid or inaccessible and will be skipped: %s", short_name)
+            return {}
         except Exception:
             logger.exception("Failed to load emoji pack: %s", short_name)
             return {}
@@ -54,13 +58,13 @@ class EmojiPackLoader:
 
     def _save_cache(self, data: dict[str, int]) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        self.storage_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        self.storage_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def read_cache(self) -> dict[str, int]:
         if not self.storage_path.exists():
             return {}
         try:
-            return {k: int(v) for k, v in json.loads(self.storage_path.read_text()).items()}
+            return {k: int(v) for k, v in json.loads(self.storage_path.read_text(encoding="utf-8")).items()}
         except Exception:
             logger.exception("Failed to read emoji cache")
             return {}
