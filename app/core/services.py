@@ -68,7 +68,7 @@ class NewsService:
             "BANNED_ALLIANCE_NAME": "Обнаружено запрещённое название/маскировка.",
             "WAR_WITHOUT_RP_PROCESS": "Военная тематика без допустимого RP-процесса.",
             "TOO_SHORT_OR_NO_RP_EVENT": "Слишком короткий текст без RP-события.",
-            "MILITARY_WEAK_CONTEXT": "Военная новость отправлена на модерацию.",
+            "MILITARY_REVIEW_REQUIRED": "Военная новость отправлена на модерацию.",
         }
         return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
 
@@ -289,7 +289,7 @@ class NewsService:
 
         formatted, entities = self._render_post(post, corrected)
 
-        if filter_result.reason in {"MILITARY_OPERATION_REVIEW", "MILITARY_WEAK_CONTEXT"}:
+        if filter_result.reason == "MILITARY_REVIEW_REQUIRED":
             await self.send_to_moderation(
                 post,
                 formatted,

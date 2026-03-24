@@ -105,11 +105,11 @@ class RPFilter:
                 return FilterResult(False, "ARMY_LIMIT_EXCEEDED_200", "численность армии выше допустимой")
             if max_army and max_army < 50:
                 return FilterResult(False, "ARMY_UNREALISTIC_TOO_SMALL", "нереалистично малая численность армии")
-            if self._contains_root(words, self.direct_war_action_roots):
-                return FilterResult(False, "WAR_ACTIONS_BLOCKED", "описаны прямые боевые действия")
             if self._contains_root(words, self.operation_without_war_roots):
-                return FilterResult(True, "MILITARY_OPERATION_REVIEW")
-            return FilterResult(True, "MILITARY_WEAK_CONTEXT")
+                return FilterResult(True, "MILITARY_OPERATION_AUTOPUBLISH")
+            if self._contains_root(words, self.direct_war_action_roots):
+                return FilterResult(True, "MILITARY_REVIEW_REQUIRED")
+            return FilterResult(True, "MILITARY_REVIEW_REQUIRED")
 
         if self._contains_root(words, self.action_roots) and self._sentence_count(low) >= 1:
             return FilterResult(True, "ALLOWED")

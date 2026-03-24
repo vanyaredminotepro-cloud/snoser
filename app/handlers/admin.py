@@ -6,7 +6,7 @@ import uuid
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -96,13 +96,23 @@ def _user_allowed_countries(user_id: int) -> list[str]:
 
 def _apply_admin_fix(raw_text: str, instructions: str) -> str:
     fixed = raw_text
+    repl_found = False
     for chunk in instructions.split(";"):
         if "->" not in chunk:
             continue
         old, new = [x.strip() for x in chunk.split("->", maxsplit=1)]
         if old:
             fixed = fixed.replace(old, new)
-    if fixed == raw_text:
+            repl_found = True
+
+    for old, new in re.findall(r"(?i)замени\s+['\"]?(.+?)['\"]?\s+на\s+['\"]?(.+?)['\"]?(?:$|;)", instructions):
+        old = old.strip()
+        new = new.strip()
+        if old:
+            fixed = fixed.replace(old, new)
+            repl_found = True
+
+    if not repl_found:
         return instructions.strip() or raw_text
     return fixed
 
@@ -160,6 +170,19 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="📰 Написать новость", callback_data="menu:write_news")],
+        [InlineKeyboardButton(text="📝 Анкета / создать страну", callback_data="menu:anketa")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats")],
+        [InlineKeyboardButton(text="📊 Статистика стран (скоро)", callback_data="menu:country_stats")],
+        [InlineKeyboardButton(text="🧾 Оспорить отклонение", callback_data="menu:appeal")],
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="menu:admin")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _extract_country_name_from_form(form_text: str) -> str:
     for line in form_text.splitlines():
         raw = line.strip()
@@ -175,32 +198,47 @@ def _extract_country_name_from_form(form_text: str) -> str:
 def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(F.text == "/start")
     async def start_cmd(message: Message) -> None:
-        rows = [
-            [KeyboardButton(text="📰 Написать новость")],
-            [KeyboardButton(text="📝 Анкета / создать страну")],
-            [KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="🧾 Оспорить отклонение")],
-        ]
-        if message.from_user and message.from_user.id == config.admin_id:
-            rows.append([KeyboardButton(text="⚙️ Админ-панель")])
-        keyboard = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+        is_admin = bool(message.from_user and message.from_user.id == config.admin_id)
         text = (
             "Бот активен.\n"
-            "Используйте кнопки меню ниже.\n\n"
+            "Используйте inline-кнопки ниже.\n\n"
             "Для публикации новости укажите корректный хештег страны (например #OBS)."
         )
-        if message.from_user and message.from_user.id == config.admin_id:
-            await message.answer(text, reply_markup=keyboard)
-            await message.answer("Админ-панель:", reply_markup=_admin_panel_keyboard())
-        else:
-            await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=_main_menu_keyboard(is_admin))
 
-    @router.message(F.text == "⚙️ Админ-панель")
-    async def admin_panel_cmd(message: Message) -> None:
-        if not message.from_user or message.from_user.id != config.admin_id:
-            await message.answer("Эта панель доступна только администратору.")
+    @router.callback_query(F.data.startswith("menu:"))
+    async def menu_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
+        action = callback.data.split(":", maxsplit=1)[1]
+        is_admin = callback.from_user.id == config.admin_id
+        await callback.answer()
+
+        if action == "write_news":
+            await state.set_state(WriteNewsState.waiting_text)
+            await callback.message.answer("Отправьте текст/медиа новости. Нужен хештег страны (#OBS / #OB / #VL и т.д.)")
             return
-        await message.answer("Админ-панель:", reply_markup=_admin_panel_keyboard())
+        if action == "anketa":
+            await state.clear()
+            await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
+            return
+        if action == "stats":
+            day, week, month, total = await service.db.news_stats()
+            await callback.message.answer(
+                f"Общая статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
+            )
+            return
+        if action == "country_stats":
+            await callback.message.answer("Статистика стран: скоро.")
+            return
+        if action == "appeal":
+            await state.set_state(AdminState.waiting_appeal)
+            await callback.message.answer("Отправьте текст апелляции одним сообщением. Мы перешлём админу.")
+            return
+        if action == "admin":
+            if not is_admin:
+                await callback.message.answer("Эта панель доступна только администратору.")
+                return
+            await callback.message.answer("Админ-панель:", reply_markup=_admin_panel_keyboard())
+            return
 
     @router.callback_query(F.data.startswith("admin:"))
     async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
@@ -231,23 +269,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         elif action == "emoji_reload":
             count = await service.refresh_emoji_packs()
             await callback.message.answer(f"Emoji packs reloaded: {count}")
-
-    @router.message(F.text == "📝 Анкета / создать страну")
-    async def anketa_menu(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
-
-    @router.message(F.text == "📊 Статистика")
-    async def user_stats_menu(message: Message) -> None:
-        day, week, month, total = await service.db.news_stats()
-        await message.answer(
-            f"Общая статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
-        )
-
-    @router.message(F.text == "🧾 Оспорить отклонение")
-    async def appeal_start(message: Message, state: FSMContext) -> None:
-        await state.set_state(AdminState.waiting_appeal)
-        await message.answer("Отправьте текст апелляции одним сообщением. Мы перешлём админу.")
 
     @router.message(AdminState.waiting_appeal)
     async def appeal_flow(message: Message, state: FSMContext) -> None:
@@ -361,11 +382,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         )
         await message.answer("Отказ отправлен пользователю.")
         await state.clear()
-
-    @router.message(F.text == "📰 Написать новость")
-    async def write_news_cmd(message: Message, state: FSMContext) -> None:
-        await state.set_state(WriteNewsState.waiting_text)
-        await message.answer("Отправьте текст/медиа новости. Нужен хештег страны (#OBS / #OB / #VL и т.д.)")
 
     @router.message(WriteNewsState.waiting_text)
     async def write_news_flow(message: Message, state: FSMContext) -> None:
