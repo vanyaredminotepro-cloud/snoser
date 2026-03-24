@@ -232,7 +232,14 @@ def bind_admin_handlers(service: NewsService) -> Router:
             )
             return
         if action == "country_stats":
-            await callback.message.answer("Статистика стран: скоро.")
+            rows = await service.db.list_country_stats()
+            if not rows:
+                await callback.message.answer("Статистика стран: скоро (пока нет данных).")
+            else:
+                lines = ["Статистика стран:"]
+                for country, budget, army, life in rows[:20]:
+                    lines.append(f"{country}: Бюджет={budget}, Армия={army}, Уровень жизни={life}")
+                await callback.message.answer("\n".join(lines))
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)
@@ -448,12 +455,24 @@ def bind_admin_handlers(service: NewsService) -> Router:
     @router.message(WriteNewsState.waiting_text)
     async def write_news_flow(message: Message, state: FSMContext) -> None:
         text = _normalize_hashtags_to_english((message.caption or message.text or "").strip())
+        state_data = await state.get_data()
+        pending_text = str(state_data.get("pending_news_text", "")).strip()
+
+        if pending_text and re.fullmatch(r"#[A-Za-zА-Яа-я0-9_]+", text):
+            text = f"{pending_text}\n{text}"
+
         if not text and not (message.photo or message.video or message.animation):
             await message.answer("Пустой текст")
             return
         final_tag = _extract_final_hashtag(text)
         if not final_tag:
-            await message.answer("Нужен хештег страны в конце новости (пример: #OBS).")
+            await state.update_data(pending_news_text=text)
+            await message.answer("Нужен хештег страны в конце новости (пример: #OBS). Отправьте хештег отдельным сообщением.")
+            return
+
+        body = re.sub(r"#[A-Za-zА-Яа-я0-9_]+\s*$", "", text).strip()
+        if not body:
+            await message.answer("Сначала отправьте текст новости, затем хештег страны.")
             return
 
         normalized_tag = _normalize_single_hashtag(final_tag)
@@ -487,6 +506,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             submitted_by_user_id=user_id,
         )
         await service.enqueue(post)
+        await state.update_data(pending_news_text="")
         await state.clear()
         await message.answer("Принято в очередь")
     @router.callback_query(F.data.startswith("mod:"))

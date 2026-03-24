@@ -79,6 +79,17 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_stats (
+                    country TEXT PRIMARY KEY,
+                    budget INTEGER NOT NULL DEFAULT 100000,
+                    army INTEGER NOT NULL DEFAULT 1000,
+                    life_level INTEGER NOT NULL DEFAULT 50,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             await db.commit()
 
     async def is_duplicate(self, content_hash: str) -> bool:
@@ -237,3 +248,37 @@ class Database:
             week = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-7 day')")).fetchone()
             month = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-30 day')")).fetchone()
         return int(day[0]), int(week[0]), int(month[0]), int(total[0])
+
+    async def apply_country_stats_delta(self, country: str, budget_delta: int = 0, army_delta: int = 0, life_delta: int = 0) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_stats (country) VALUES (?)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE country_stats SET "
+                "budget = MAX(0, budget + ?), "
+                "army = MAX(0, army + ?), "
+                "life_level = MIN(100, MAX(0, life_level + ?)), "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE country = ?",
+                (budget_delta, army_delta, life_delta, country),
+            )
+            await db.commit()
+
+    async def get_country_stats(self, country: str) -> tuple[int, int, int] | None:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT budget, army, life_level FROM country_stats WHERE country = ?",
+                (country,),
+            )).fetchone()
+        if not row:
+            return None
+        return int(row[0]), int(row[1]), int(row[2])
+
+    async def list_country_stats(self) -> list[tuple[str, int, int, int]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT country, budget, army, life_level FROM country_stats ORDER BY budget DESC, army DESC"
+            )).fetchall()
+        return [(str(r[0]), int(r[1]), int(r[2]), int(r[3])) for r in rows]

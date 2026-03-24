@@ -71,7 +71,17 @@ class RPFilter:
     @staticmethod
     def _contains_banned_alliance_name(low: str) -> bool:
         normalized = re.sub(r"[^a-zа-я0-9]+", "", low)
-        return any(token in low or token.replace(".", "") in normalized for token in RPFilter.banned_alliance_tokens)
+        for token in RPFilter.banned_alliance_tokens:
+            compact = token.replace(".", "")
+            if len(compact) <= 2:
+                continue
+            if "." in token:
+                if compact in normalized:
+                    return True
+                continue
+            if re.search(rf"(?i)(?<!\w){re.escape(token)}(?!\w)", low):
+                return True
+        return False
 
     @staticmethod
     def _extract_declared_country_terms(low: str) -> list[str]:

@@ -44,7 +44,10 @@ class AIGuard:
             (
                 token
                 for token in self.toxic_tokens
-                if token in low or token.replace(".", "") in normalized or token.replace(".", "") in leet
+                if (
+                    ("." in token and len(token.replace(".", "")) > 2 and (token.replace(".", "") in normalized or token.replace(".", "") in leet))
+                    or (len(token.replace(".", "")) > 2 and re.search(rf"(?i)(?<!\w){re.escape(token)}(?!\w)", low))
+                )
             ),
             None,
         )

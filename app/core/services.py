@@ -141,6 +141,41 @@ class NewsService:
             return f"https://t.me/{channel}/{post.message_id}"
         return None
 
+    @staticmethod
+    def _derive_country_stat_deltas(text: str) -> tuple[int, int, int]:
+        low = text.lower()
+        budget_delta = 0
+        army_delta = 0
+        life_delta = 0
+
+        if any(k in low for k in ["реформ", "инвест", "завод", "производств", "эконом"]):
+            budget_delta += 5000
+            life_delta += 1
+
+        if any(k in low for k in ["учен", "трениров", "мобилизац", "призыв"]):
+            values = [int(v) for v in re.findall(r"\b(\d{1,5})\b", low)]
+            if values:
+                army_delta += min(max(values[0], 10), 5000)
+            else:
+                army_delta += 50
+
+        if any(k in low for k in ["обстрел", "штурм", "теракт", "кризис", "потер"]):
+            budget_delta -= 3000
+            life_delta -= 2
+
+        if any(k in low for k in ["медицин", "школ", "университет", "соцпрограмм", "уровень жизни"]):
+            life_delta += 2
+
+        return budget_delta, army_delta, life_delta
+
+    async def _apply_country_stats_effect(self, post: IncomingPost) -> None:
+        if not post.source_country or post.source_country == "MANUAL":
+            return
+        budget_delta, army_delta, life_delta = self._derive_country_stat_deltas(post.text or "")
+        if budget_delta == 0 and army_delta == 0 and life_delta == 0:
+            return
+        await self.db.apply_country_stats_delta(post.source_country, budget_delta, army_delta, life_delta)
+
     def _summarize_if_huge(self, post: IncomingPost, text: str) -> str:
         if len(text) <= 900:
             return text
@@ -345,6 +380,7 @@ class NewsService:
             else:
                 await self.bot.send_message(chat_id=config.target_channel, text=formatted)
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await self._apply_country_stats_effect(post)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
         except (TelegramBadRequest, RPCError):
             logger.exception("Publish failed")
@@ -364,6 +400,7 @@ class NewsService:
                 return
 
             await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await self._apply_country_stats_effect(post)
             logger.info("Published media %s/%s", post.source_channel, post.message_id)
         except (TelegramBadRequest, RPCError):
             logger.exception("Media publish failed")
