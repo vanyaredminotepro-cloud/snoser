@@ -71,6 +71,9 @@ class Config:
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
+    antiflood_window: int = 10
+    antiflood_max_actions: int = 5
+    antiflood_ban_duration: int = 300
     scheduler_poll_seconds: int = 5
     rss_poll_seconds: int = 45
     war_digest_threshold: int = 4

@@ -213,6 +213,24 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS antiflood_bans (
+                    user_id INTEGER PRIMARY KEY,
+                    banned_until INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_bans (
+                    user_id INTEGER PRIMARY KEY,
+                    banned_at INTEGER NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    banned_by INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
             try:
                 await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
             except aiosqlite.OperationalError:
@@ -624,3 +642,48 @@ class Database:
             row = await (await db.execute("SELECT warnings FROM country_warnings WHERE country = ?", (country,))).fetchone()
             await db.commit()
         return int(row[0]) if row else 0
+
+    async def set_antiflood_ban(self, user_id: int, banned_until: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO antiflood_bans (user_id, banned_until) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET banned_until = excluded.banned_until",
+                (user_id, banned_until),
+            )
+            await db.commit()
+
+    async def get_antiflood_ban(self, user_id: int) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute("SELECT banned_until FROM antiflood_bans WHERE user_id = ?", (user_id,))).fetchone()
+        return int(row[0]) if row else 0
+
+    async def clear_antiflood_ban(self, user_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM antiflood_bans WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def ban_user(self, user_id: int, banned_by: int, reason: str = "") -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO user_bans (user_id, banned_at, reason, banned_by) VALUES (?, strftime('%s','now'), ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET banned_at = excluded.banned_at, reason = excluded.reason, banned_by = excluded.banned_by",
+                (user_id, reason[:300], banned_by),
+            )
+            await db.commit()
+
+    async def unban_user(self, user_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM user_bans WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def is_user_banned(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute("SELECT 1 FROM user_bans WHERE user_id = ? LIMIT 1", (user_id,))).fetchone()
+        return row is not None
+
+    async def list_user_bans(self, limit: int = 30) -> list[tuple[int, int, str, int]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT user_id, banned_at, reason, banned_by FROM user_bans ORDER BY banned_at DESC LIMIT ?",
+                (limit,),
+            )).fetchall()
+        return [(int(r[0]), int(r[1]), str(r[2]), int(r[3])) for r in rows]

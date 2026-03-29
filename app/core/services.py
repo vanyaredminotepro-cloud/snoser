@@ -44,6 +44,7 @@ class NewsService:
         self.pack_emoji_cache: dict[str, int] = self.emoji_loader.read_cache()
         self.queue: asyncio.Queue[IncomingPost] = asyncio.Queue(maxsize=3000)
         self.user_windows: dict[int, deque[int]] = {}
+        self.action_windows: dict[int, deque[int]] = {}
 
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
@@ -457,6 +458,25 @@ class NewsService:
                 await self.db.add_strike(user_id, blocked_until_ts=2_147_483_647)
                 return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
             return False, "Вы получили мут на 10 минут по причине: флуд командами. Ваши команды не будут приниматься в течение мута."
+        return True, "OK"
+
+    async def check_user_access(self, user_id: int, *, is_callback: bool = False) -> tuple[bool, str]:
+        now = int(time.time())
+        if await self.db.is_user_banned(user_id):
+            return False, "Вы забанены. Если считаете это ошибкой, обратитесь к админу."
+
+        banned_until = await self.db.get_antiflood_ban(user_id)
+        if banned_until > now:
+            return False, f"Вы временно заблокированы за флуд. Обратитесь к {config.admin_username} для разбана."
+
+        window = self.action_windows.setdefault(user_id, deque())
+        while window and now - window[0] > max(1, config.antiflood_window):
+            window.popleft()
+        window.append(now)
+        if len(window) > max(1, config.antiflood_max_actions):
+            until = now + max(30, config.antiflood_ban_duration)
+            await self.db.set_antiflood_ban(user_id, until)
+            return False, f"Вы временно заблокированы за флуд и попытку прекращения работы бота. Обратитесь к {config.admin_username} для разбана."
         return True, "OK"
 
     async def worker(self) -> None:
