@@ -1,3 +1,4 @@
+import hashlib
 import re
 
 from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, MessageEntityCustomEmoji, MessageEntityItalic
@@ -12,13 +13,22 @@ class NewsFormatter:
         "map": "🌐",
         "default": "👀",
     }
+    default_emoji_cycle = ["👀", "💭", "📈", "⚠️", "🌐", "❗️"]
+    emoji_to_key = {
+        "👀": "DEFAULT",
+        "💭": "DIPLOMACY",
+        "📈": "ECONOMY",
+        "⚠️": "WARNING",
+        "🌐": "MAP",
+        "❗️": "IMPORTANT",
+    }
 
 
     emoji_rules = {
         "economy": ["эконом", "бюджет", "инвест", "вкладывает", "финанс", "промышлен", "фабрик", "завод"],
         "diplomacy": ["сотруднич", "встреч", "переговор", "договор", "союз", "визит"],
-        "warning": ["теракт", "болезн", "вирус", "mks20", "mks40", "чс", "угроз"],
-        "map": ["карта", "map", "границ", "территор"],
+        "warning": ["теракт", "болезн", "вирус", "mks20", "mks40", "чс", "угроз", "санкц", "обстрел", "штурм"],
+        "map": ["карта", "map", "границ", "территор", "колонизац", "захват"],
         "important": ["срочно", "важно", "экстренно", "‼"],
     }
 
@@ -59,10 +69,19 @@ class NewsFormatter:
                 return candidate
         return "default"
 
+    @staticmethod
+    def _stable_pick(items: list[str], seed: str) -> str:
+        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+        idx = int(digest[:8], 16) % len(items)
+        return items[idx]
+
     def _emoji_char_and_id(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> tuple[str, int | None]:
         label = self._emoji_label(paragraph)
-        custom_id_raw = (premium_emoji_ids or {}).get(label.upper()) or (premium_emoji_ids or {}).get("DEFAULT")
         fallback = self.paragraph_emoji_fallback[label]
+        if label == "default":
+            fallback = self._stable_pick(self.default_emoji_cycle, paragraph)
+        emoji_key = self.emoji_to_key.get(fallback, label.upper())
+        custom_id_raw = (premium_emoji_ids or {}).get(emoji_key) or (premium_emoji_ids or {}).get("DEFAULT")
         return fallback, int(custom_id_raw) if custom_id_raw else None
 
     @staticmethod

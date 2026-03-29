@@ -330,7 +330,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         source = source_raw
         source = re.sub(r"^https?://t.me/", "", source, flags=re.IGNORECASE).strip()
         if source and not source.startswith("+") and not source.startswith("@"):
-            source = source
+            source = f"@{source}"
         if not org or not source:
             await message.answer("Пустое название организации или источника.")
             return
@@ -400,10 +400,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         )
         await message.bot.send_message(config.admin_id, admin_text, reply_markup=_registration_review_keyboard(token))
 
-        if reg_type == "country" and user_id:
-            country_name = _extract_country_name_from_form(raw_form)
-            await service.db.add_country_leader(country_name, user_id, source="registration")
-
         await state.clear()
         await message.answer("Анкета отправлена админу в ЛС (@supermegaluti).")
 
@@ -424,6 +420,9 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
         if action == "approve":
             await service.db.set_registration_application_status(token, "approved")
+            if reg_type == "country" and user_id:
+                country_name = _extract_country_name_from_form(form_text)
+                await service.db.add_country_leader(country_name, user_id, source="registration")
             await callback.message.answer("Анкета принята")
             await callback.message.bot.send_message(user_id, f"Ваша анкета ({REG_TYPE_LABELS.get(reg_type, reg_type)}) принята администратором.")
         else:

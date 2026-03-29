@@ -81,6 +81,18 @@ class NewsService:
         return terms
 
     @staticmethod
+    def _known_country_hashtags() -> set[str]:
+        tags: set[str] = set()
+        for values in config.country_hashtags.values():
+            for tag in values:
+                normalized = str(tag).strip().upper()
+                if not normalized.startswith("#"):
+                    normalized = f"#{normalized}"
+                tags.add(normalized)
+        tags.add("#RP")
+        return tags
+
+    @staticmethod
     def _reject_reason_text(reason: str) -> str:
         mapping = {
             "WAR_ACTIONS_BLOCKED": "Обнаружены прямые военные действия (атака/обстрел/штурм).",
@@ -92,6 +104,12 @@ class NewsService:
             "WAR_WITHOUT_RP_PROCESS": "Военная тематика без допустимого RP-процесса.",
             "TOO_SHORT_OR_NO_RP_EVENT": "Слишком короткий текст без RP-события.",
             "MILITARY_REVIEW_REQUIRED": "Военная новость отправлена на модерацию.",
+            "UNKNOWN_COUNTRY_HASHTAG": "Указан хештег страны, которой нет в системе.",
+            "ARMY_LIMIT_EXCEEDED_200": "Численность армии превышает допустимый лимит (до 200).",
+            "ARMY_UNREALISTIC_TOO_SMALL": "Численность армии ниже допустимого минимума (от 50).",
+            "FORBIDDEN_WEAPON_TYPE": "Обнаружен запрещённый тип оружия/технологии по правилам РП.",
+            "FORBIDDEN_STRUCTURE_OR_ABUSE": "Обнаружены запрещённые действия (доксинг/угрозы/вне-системные структуры).",
+            "WAR_WITHOUT_EVIDENCE": "Военные действия без подтверждающих кадров/видео запрещены.",
         }
         return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
 
@@ -306,7 +324,7 @@ class NewsService:
             logger.info("Empty message skip: %s/%s", post.source_channel, post.message_id)
             return
 
-        hash_value = content_hash(f"{post.source_channel}:{strip_hashtags(source_text)}")
+        hash_value = content_hash(f"{post.source_channel}:{post.source_country}:{strip_hashtags(source_text)}")
         if await self.db.is_duplicate(hash_value):
             logger.info("Duplicate skip: %s", hash_value)
             return
@@ -330,7 +348,11 @@ class NewsService:
                 await self.send_to_moderation(post, corrected or "[MEDIA]", ai_result.reason, raw_text=corrected)
             return
 
-        filter_result = self.rp_filter.check(corrected or "media news", known_countries=self._known_country_terms())
+        filter_result = self.rp_filter.check(
+            corrected or "media news",
+            known_countries=self._known_country_terms(),
+            known_hashtags=self._known_country_hashtags(),
+        )
 
         if not filter_result.allowed:
             logger.info("Blocked by RP filter %s: %s/%s", filter_result.reason, post.source_channel, post.message_id)

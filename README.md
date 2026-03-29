@@ -144,7 +144,7 @@ python app/main.py
 ## Надежность и производительность
 
 - Async-only I/O.
-- Очередь обработки ограничена (`maxsize=2000`) для memory safety.
+- Очередь обработки ограничена (`maxsize=3000`) для memory safety.
 - SQLite для устойчивости к рестартам.
 - Авто-restart на Railway (`ON_FAILURE`).
 - uvloop для ускорения event loop.
