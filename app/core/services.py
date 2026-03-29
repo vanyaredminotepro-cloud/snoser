@@ -117,7 +117,7 @@ class NewsService:
         return mapping.get(reason, f"Новость не прошла фильтр: {reason}.")
 
     @staticmethod
-    def _extract_special_markers(text: str) -> tuple[str, str]:
+    def _extract_special_markers(text: str) -> str:
         markers = {
             "#РП": "👑",
             "#НРП": "⭐️",
@@ -131,19 +131,16 @@ class NewsService:
             "#MKS40": "⚠️",
         }
         normalized_markers = {k.upper(): v for k, v in markers.items()}
-        found: list[str] = []
         cleaned = text
         for marker, emoji in normalized_markers.items():
             pattern = re.compile(rf"(?i)(?<!\w){re.escape(marker)}(?!\w)(?:[,.;:!?])?")
             if pattern.search(cleaned):
-                if emoji not in found:
-                    found.append(emoji)
                 cleaned = pattern.sub("", cleaned)
         cleaned = re.sub(r"\(\s*\)", "", cleaned)
         cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
         cleaned = re.sub(r"([,.;:!?]){2,}", r"\1", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" \n\t,;.")
-        return cleaned, (" ".join(found) if found else "")
+        return cleaned
 
     def _render_post(self, post: IncomingPost, text: str) -> tuple[str, list]:
         rewritten = self.formatter.rewrite(post.source_country, text)
@@ -622,7 +619,7 @@ class NewsService:
         translated = await self.translator.to_russian(source_text) if source_text else ""
         corrected = autocorrect_news_text(strip_emojis(translated or source_text))
         corrected = self._summarize_if_huge(post, corrected)
-        corrected, _ = self._extract_special_markers(corrected)
+        corrected = self._extract_special_markers(corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:

@@ -23,7 +23,6 @@ class WriteNewsState(StatesGroup):
 
 class RegistrationState(StatesGroup):
     waiting_form = State()
-    waiting_party_type = State()
 
 
 class AdminState(StatesGroup):
@@ -376,7 +375,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
     async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
         _, reg_type = callback.data.split(":", maxsplit=1)
         if reg_type == "party_select":
-            await state.set_state(RegistrationState.waiting_party_type)
             await callback.message.answer("Выберите тип партии:", reply_markup=_party_type_keyboard())
             await callback.answer()
             return
