@@ -624,6 +624,12 @@ class NewsService:
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
             logger.info("Blocked by AI guard %s (score=%s): %s/%s", ai_result.reason, ai_result.score, post.source_channel, post.message_id)
+            if post.source_country and post.source_country != "MANUAL":
+                warn_count = await self.db.add_country_warning(post.source_country, ai_result.details or ai_result.reason)
+                await self.bot.send_message(
+                    config.admin_id,
+                    f"⚠️ Варн стране {post.source_country}: #{warn_count}\nПричина: {ai_result.details or ai_result.reason}",
+                )
             if post.submitted_by_user_id:
                 await self.bot.send_message(
                     post.submitted_by_user_id,

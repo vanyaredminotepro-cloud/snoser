@@ -13,7 +13,15 @@ class NewsFormatter:
         "map": "🌐",
         "default": "👀",
     }
-    default_emoji_cycle = ["👀", "💭", "📈", "⚠️", "🌐", "❗️"]
+    default_emoji_cycle = ["👀", "💭", "📈", "⚠️", "🌐", "❗️", "🛰️", "🏛️", "🧭", "🗞️"]
+    emoji_variants = {
+        "important": ["❗️", "🚨", "📢"],
+        "economy": ["📈", "💰", "🏦", "⚙️"],
+        "diplomacy": ["💭", "🤝", "🕊️", "🗣️"],
+        "warning": ["⚠️", "🛑", "🚫", "☣️"],
+        "map": ["🌐", "🗺️", "📍", "🧭"],
+        "default": default_emoji_cycle,
+    }
     emoji_to_key = {
         "👀": "DEFAULT",
         "💭": "DIPLOMACY",
@@ -77,9 +85,8 @@ class NewsFormatter:
 
     def _emoji_char_and_id(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> tuple[str, int | None]:
         label = self._emoji_label(paragraph)
-        fallback = self.paragraph_emoji_fallback[label]
-        if label == "default":
-            fallback = self._stable_pick(self.default_emoji_cycle, paragraph)
+        variants = self.emoji_variants.get(label, [self.paragraph_emoji_fallback[label]])
+        fallback = self._stable_pick(variants, paragraph)
         emoji_key = self.emoji_to_key.get(fallback, label.upper())
         custom_id_raw = (premium_emoji_ids or {}).get(emoji_key) or (premium_emoji_ids or {}).get("DEFAULT")
         return fallback, int(custom_id_raw) if custom_id_raw else None

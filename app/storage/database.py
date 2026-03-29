@@ -203,6 +203,16 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_warnings (
+                    country TEXT PRIMARY KEY,
+                    warnings INTEGER NOT NULL DEFAULT 0,
+                    last_reason TEXT NOT NULL DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             try:
                 await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
             except aiosqlite.OperationalError:
@@ -600,3 +610,17 @@ class Database:
                     (day_key, text, reward_budget, reward_life),
                 )
             await db.commit()
+
+    async def add_country_warning(self, country: str, reason: str) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_warnings (country, warnings, last_reason) VALUES (?, 0, '')",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE country_warnings SET warnings = warnings + 1, last_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (reason[:300], country),
+            )
+            row = await (await db.execute("SELECT warnings FROM country_warnings WHERE country = ?", (country,))).fetchone()
+            await db.commit()
+        return int(row[0]) if row else 0
