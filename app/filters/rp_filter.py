@@ -18,6 +18,7 @@ class RPFilter:
     direct_war_action_roots = {
         "атак", "штурм", "наступ", "обстрел", "подрыв", "зачист", "уничтож", "бомб", "высадк", "боестолк", "удар",
     }
+    evidence_roots = {"кадр", "видео", "съемк", "сним", "пруф"}
 
     operation_without_war_roots = {
         "мобилизац", "подготов", "оборон", "перегруп", "эвакуац", "ультимат", "учени", "готовност", "патрул",
@@ -45,6 +46,12 @@ class RPFilter:
     }
 
     real_world_roots = {"росси", "украин", "нато", "сша", "евросоюз", "пути", "байден", "ww2"}
+    forbidden_weapon_roots = {
+        "ядер", "атомн", "химическ", "газов", "лазер", "робот", "излучен", "гранатомет", "бомб",
+    }
+    forbidden_structure_roots = {
+        "докс", "доксинг", "угроз", "свой чат", "своя валюта", "своя карта", "мультиаккаунт", "фальсификац",
+    }
 
     banned_alliance_tokens = {
         "penis", "p.e.n.i.s", "п.ен.и.с", "пенис", "хуй", "еб", "нахуй", "пизд", "пидор",
@@ -87,7 +94,21 @@ class RPFilter:
     def _extract_declared_country_terms(low: str) -> list[str]:
         return re.findall(r"(?:республика|королевство|государство|страна)\s+([а-яa-zё\-]{4,})", low)
 
-    def check(self, text: str, known_countries: set[str] | None = None) -> FilterResult:
+    @staticmethod
+    def _extract_hashtags(text: str) -> set[str]:
+        return {f"#{m.upper()}" for m in re.findall(r"#([A-Za-zА-Яа-я0-9_]{2,})", text)}
+
+    @staticmethod
+    def _extract_army_values(text: str) -> list[int]:
+        values = [int(v) for v in re.findall(r"\b(\d{1,5})\s*(?:солдат|бойц|военн\w*)", text.lower())]
+        return values
+
+    def check(
+        self,
+        text: str,
+        known_countries: set[str] | None = None,
+        known_hashtags: set[str] | None = None,
+    ) -> FilterResult:
         low = text.lower()
         words = self._words(low)
 
@@ -97,6 +118,12 @@ class RPFilter:
         if any(phrase in low for phrase in self.ooc_phrases) or self._contains_root(words, self.ooc_roots):
             return FilterResult(False, "OOC_META_CONTENT", "обнаружены OOC/meta маркеры")
 
+        if self._contains_root(words, self.forbidden_weapon_roots):
+            return FilterResult(False, "FORBIDDEN_WEAPON_TYPE", "обнаружено запрещённое оружие/технология")
+
+        if any(token in low for token in self.forbidden_structure_roots):
+            return FilterResult(False, "FORBIDDEN_STRUCTURE_OR_ABUSE", "обнаружены запрещённые действия/структуры")
+
         if self._contains_root(words, self.real_world_roots):
             return FilterResult(False, "REAL_WORLD_CONTENT", "обнаружены упоминания реального мира")
 
@@ -105,6 +132,12 @@ class RPFilter:
             for declared in declared_terms:
                 if declared not in known_countries:
                     return FilterResult(False, "UNKNOWN_COUNTRY_MENTIONED", f"неизвестная страна: {declared}")
+
+        if known_hashtags:
+            incoming_tags = self._extract_hashtags(text)
+            unknown_tags = [t for t in incoming_tags if t not in known_hashtags and len(t) >= 3]
+            if unknown_tags:
+                return FilterResult(False, "UNKNOWN_COUNTRY_HASHTAG", f"неизвестные хештеги: {', '.join(sorted(unknown_tags)[:3])}")
 
         if len(words) < 3:
             return FilterResult(False, "TOO_SHORT_OR_NO_RP_EVENT", "слишком короткий текст без RP-контекста")
@@ -118,8 +151,21 @@ class RPFilter:
             if self._contains_root(words, self.operation_without_war_roots):
                 return FilterResult(True, "MILITARY_OPERATION_AUTOPUBLISH")
             if self._contains_root(words, self.direct_war_action_roots):
+                has_evidence = self._contains_root(words, self.evidence_roots)
+                negated_evidence = bool(re.search(r"без\s+(?:кадр\w*|видео|съемк\w*)", low))
+                if not has_evidence or negated_evidence:
+                    return FilterResult(False, "WAR_WITHOUT_EVIDENCE", "для военных действий нужны кадры/видео")
                 return FilterResult(True, "MILITARY_REVIEW_REQUIRED")
             return FilterResult(True, "MILITARY_REVIEW_REQUIRED")
+
+        explicit_army_values = self._extract_army_values(text)
+        if explicit_army_values:
+            max_explicit = max(explicit_army_values)
+            min_explicit = min(explicit_army_values)
+            if max_explicit > 200:
+                return FilterResult(False, "ARMY_LIMIT_EXCEEDED_200", "численность армии выше допустимой (50..200)")
+            if min_explicit < 50:
+                return FilterResult(False, "ARMY_UNREALISTIC_TOO_SMALL", "нереалистично малая численность армии (50..200)")
 
         if self._contains_root(words, self.action_roots) and self._sentence_count(low) >= 1:
             return FilterResult(True, "ALLOWED")

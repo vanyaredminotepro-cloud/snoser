@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from dataclasses import dataclass
 
 
@@ -22,6 +23,10 @@ class AIGuard:
     }
 
     suspicious_phrases = {"яна цист", "yanacist", "yana cist"}
+    obscene_roots = {
+        "насил", "nasil", "педоф", "pedof", "член", "хуй", "пенис", "penis",
+        "фашист", "fashist", "гитлер", "hitler", "наци", "nazi", "изнасил", "rape",
+    }
 
     bypass_tokens = {
         "\\u200b", "\\u2060", "\\ufeff",
@@ -34,9 +39,24 @@ class AIGuard:
             mapped = mapped.replace(src, dst)
         return mapped
 
+    @staticmethod
+    def _strip_combining(text: str) -> str:
+        normalized = unicodedata.normalize("NFKD", text)
+        return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+
+    @classmethod
+    def _compact_text(cls, text: str) -> str:
+        clean = cls._strip_combining(text.lower())
+        return re.sub(r"[^a-zа-я0-9]+", "", clean)
+
+    @staticmethod
+    def _maybe_spelled_abbrev(text: str) -> list[str]:
+        chunks = re.findall(r"(?:[a-zа-я0-9]\s*[.\-_ ]\s*){3,}[a-zа-я0-9]", text.lower())
+        return [re.sub(r"[^a-zа-я0-9]+", "", c) for c in chunks]
+
     def analyze(self, text: str) -> AIGuardResult:
-        low = text.lower().strip()
-        normalized = re.sub(r"[^a-zа-я0-9]+", "", low)
+        low = self._strip_combining(text.lower().strip())
+        normalized = self._compact_text(low)
         leet = self._leet_normalize(normalized)
         score = 0
 
@@ -58,12 +78,18 @@ class AIGuard:
             score += 60
         if any(phrase in low for phrase in self.suspicious_phrases):
             score += 100
+        root_hit = next((r for r in self.obscene_roots if r in normalized or r in leet), None)
+        if root_hit:
+            score += 180
+        abbrev_hits = self._maybe_spelled_abbrev(low)
+        if any(any(root in token for root in self.obscene_roots) for token in abbrev_hits):
+            score += 180
         if any(token in text for token in self.bypass_tokens):
             score += 40
         if re.search(r"[A-ZА-Я]{6,}", text):
             score += 10
 
         if score >= 80 or toxic_hit is not None:
-            details = toxic_hit or non_rp_hit or "токсичный/OOC фрагмент"
+            details = toxic_hit or root_hit or non_rp_hit or "токсичный/OOC фрагмент"
             return AIGuardResult(False, "AI_GUARD_TOXIC_OR_NON_RP", score, details=details)
         return AIGuardResult(True, "AI_GUARD_OK", score)
