@@ -160,39 +160,130 @@ class NewsService:
         return None
 
     @staticmethod
-    def _derive_country_stat_deltas(text: str) -> tuple[int, int, int]:
+    def _country_genitive(country: str) -> str:
+        if country.endswith("ия"):
+            return f"{country[:-2]}ии"
+        if country.endswith("а"):
+            return f"{country[:-1]}ы"
+        return f"{country}а"
+
+    @staticmethod
+    def _power_score(budget: int, army: int, citizens: int, life_level: int) -> int:
+        return int((army * 2) + (budget // 1000) + (citizens // 20) + (life_level * 3))
+
+    @staticmethod
+    def _derive_country_stat_deltas(text: str, population: int = 100) -> tuple[int, int, int, int]:
         low = text.lower()
         budget_delta = 0
         army_delta = 0
         life_delta = 0
+        citizens_delta = 0
 
         if any(k in low for k in ["реформ", "инвест", "завод", "производств", "эконом"]):
             budget_delta += 5000
             life_delta += 1
+            citizens_delta += 20
 
         if any(k in low for k in ["учен", "трениров", "мобилизац", "призыв"]):
             values = [int(v) for v in re.findall(r"\b(\d{1,5})\b", low)]
+            mobilization_cap = max(15, min(200, population // 20))
             if values:
-                army_delta += min(max(values[0], 10), 5000)
+                army_delta += min(max(values[0], 10), mobilization_cap)
             else:
-                army_delta += 50
+                army_delta += mobilization_cap
+            budget_delta -= 1000
 
         if any(k in low for k in ["обстрел", "штурм", "теракт", "кризис", "потер"]):
             budget_delta -= 3000
             life_delta -= 2
+            citizens_delta -= 30
 
         if any(k in low for k in ["медицин", "школ", "университет", "соцпрограмм", "уровень жизни"]):
             life_delta += 2
+            citizens_delta += 35
 
-        return budget_delta, army_delta, life_delta
+        return budget_delta, army_delta, life_delta, citizens_delta
 
     async def _apply_country_stats_effect(self, post: IncomingPost) -> None:
         if not post.source_country or post.source_country == "MANUAL":
             return
-        budget_delta, army_delta, life_delta = self._derive_country_stat_deltas(post.text or "")
-        if budget_delta == 0 and army_delta == 0 and life_delta == 0:
+        population = await self.db.get_country_population(post.source_country)
+        budget_delta, army_delta, life_delta, citizens_delta = self._derive_country_stat_deltas(post.text or "", population=population)
+        if budget_delta == 0 and army_delta == 0 and life_delta == 0 and citizens_delta == 0:
             return
-        await self.db.apply_country_stats_delta(post.source_country, budget_delta, army_delta, life_delta)
+        await self.db.apply_country_stats_delta(
+            post.source_country,
+            budget_delta=budget_delta,
+            army_delta=army_delta,
+            life_delta=life_delta,
+            citizens_delta=citizens_delta,
+        )
+
+    async def render_country_stats_card(self, country: str) -> str:
+        rows = await self.db.list_country_stats()
+        if not rows:
+            return "Статистика стран пока пуста."
+
+        by_army = sorted(rows, key=lambda r: r[2], reverse=True)
+        by_budget = sorted(rows, key=lambda r: r[1], reverse=True)
+        by_citizens = sorted(rows, key=lambda r: r[3], reverse=True)
+        by_power = sorted(rows, key=lambda r: self._power_score(r[1], r[2], r[3], r[4]), reverse=True)
+
+        target = next((r for r in rows if r[0].lower() == country.lower()), None)
+        if not target:
+            return "Для вашей страны пока нет данных в статистике."
+
+        c_name, budget, army, citizens, life = target
+        rank_army = next((idx + 1 for idx, row in enumerate(by_army) if row[0] == c_name), 0)
+        rank_budget = next((idx + 1 for idx, row in enumerate(by_budget) if row[0] == c_name), 0)
+        rank_citizens = next((idx + 1 for idx, row in enumerate(by_citizens) if row[0] == c_name), 0)
+        rank_power = next((idx + 1 for idx, row in enumerate(by_power) if row[0] == c_name), 0)
+        power = self._power_score(budget, army, citizens, life)
+        gen = self._country_genitive(c_name)
+
+        return (
+            "<blockquote>"
+            f"<tg-emoji emoji-id=\"{config.premium_emoji_ids.get('MAP', '')}\"></tg-emoji> "
+            f"<b><i>Статистика {gen}</i></b>\n"
+            f"<tg-emoji emoji-id=\"{config.premium_emoji_ids.get('WARNING', '')}\"></tg-emoji> "
+            f"<b>Мощь:</b> <i>{power}</i> (место #{rank_power})\n"
+            f"<tg-emoji emoji-id=\"{config.premium_emoji_ids.get('ECONOMY', '')}\"></tg-emoji> "
+            f"<b>Бюджет:</b> <i>{budget:,}</i> (место #{rank_budget})\n"
+            f"<tg-emoji emoji-id=\"{config.premium_emoji_ids.get('IMPORTANT', '')}\"></tg-emoji> "
+            f"<b>Армия:</b> <i>{army}</i> (место #{rank_army})\n"
+            f"<tg-emoji emoji-id=\"{config.premium_emoji_ids.get('DIPLOMACY', '')}\"></tg-emoji> "
+            f"<b>Граждане:</b> <i>{citizens}</i> (место #{rank_citizens})\n"
+            f"<b>Уровень жизни:</b> <i>{life}</i>/100"
+            "</blockquote>"
+        )
+
+    async def render_global_stats(self) -> str:
+        rows = await self.db.list_country_stats()
+        if not rows:
+            return "Статистика пока не заполнена."
+
+        def medal(i: int) -> str:
+            return "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i + 1}."
+
+        by_army = sorted(rows, key=lambda r: r[2], reverse=True)[:9]
+        by_budget = sorted(rows, key=lambda r: r[1], reverse=True)[:9]
+        by_citizens = sorted(rows, key=lambda r: r[3], reverse=True)[:9]
+
+        army_lines = [f"{medal(i)} <b>{country}</b> — <i>{army} ч.</i>" for i, (country, _, army, _, _) in enumerate(by_army)]
+        budget_lines = [f"{medal(i)} <b>{country}</b> — <i>{budget:,} вирт-руб.</i>" for i, (country, budget, _, _, _) in enumerate(by_budget)]
+        citizen_lines = [f"{medal(i)} <b>{country}</b> — <i>{citizens} ч.</i>" for i, (country, _, _, citizens, _) in enumerate(by_citizens)]
+
+        return (
+            "<blockquote>"
+            "<b>📊 Статистика армий в РП</b>\n"
+            + "\n".join(army_lines)
+            + "\n\n<b>🕯 Статистика бюджетов в РП</b>\n"
+            + "\n".join(budget_lines)
+            + "\n\n<b>📈 Статистика граждан в РП</b>\n"
+            + "\n".join(citizen_lines)
+            + "\n\n#RP"
+            "</blockquote>"
+        )
 
     def _summarize_if_huge(self, post: IncomingPost, text: str) -> str:
         if len(text) <= 900:

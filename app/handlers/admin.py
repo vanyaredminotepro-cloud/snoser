@@ -23,6 +23,7 @@ class WriteNewsState(StatesGroup):
 
 class RegistrationState(StatesGroup):
     waiting_form = State()
+    waiting_party_type = State()
 
 
 class AdminState(StatesGroup):
@@ -124,7 +125,8 @@ REG_TYPE_LABELS = {
     "group": "Группировка",
     "country": "Страна",
     "movement": "Движение",
-    "party": "Партия",
+    "party_legal": "Легальная партия",
+    "party_illegal": "Нелегальная партия",
 }
 
 REGISTRATION_TEMPLATES = {
@@ -132,7 +134,8 @@ REGISTRATION_TEMPLATES = {
     "group": """Шаблон анкеты для группировки:\n\n1. Префикс группировки (ЧВК, ДШРГ и т.д.)\n2. Название и полное звучание\n3. Зависимая/независимая\n4. Задачи группировки\n5. Численность (20-40)\n6. Позывной командира\n7. Страна базирования (если зависима)\n8. Бюджет (20-35 тыс. вирт-рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
     "person": """Шаблон анкеты для известного человека:\n\n1. Ненастоящее имя/позывной\n2. Страна деятельности\n3. С чем связана деятельность\n4. Работа\n5. Деньги (10-15 тыс. вирт рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
     "movement": """Шаблон анкеты для движения:\n\n1. Название движения\n2. Идеология/цель\n3. Лидер\n4. Страна деятельности\n5. Краткий план действий\n\nОтправьте заполненную анкету одним сообщением.""",
-    "party": """Шаблон анкеты для партии:\n\n1. Название партии\n2. Лидер партии\n3. Политическая программа\n4. Страна деятельности\n5. Цели на ближайший период\n\nОтправьте заполненную анкету одним сообщением.""",
+    "party_legal": """Шаблон анкеты для ЛЕГАЛЬНОЙ партии:\n\n1. Название партии\n2. Лидер партии\n3. Политическая программа\n4. Страна деятельности\n5. Цели на ближайший период\n6. Подтверждение согласования с президентом страны\n\nОтправьте заполненную анкету одним сообщением.""",
+    "party_illegal": """Шаблон анкеты для НЕЛЕГАЛЬНОЙ партии:\n\n1. Название партии\n2. Лидер подпольной структуры\n3. Идеология/цель\n4. Страна деятельности\n5. Методы действий (без нарушения OOC/реал-правил)\n6. Обоснование, почему регистрация должна идти через Верховного\n\nВажно: нелегальные партии утверждаются только Верховным (главой РП).""",
 }
 
 
@@ -143,7 +146,16 @@ def _registration_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Зарегистрироваться как группировка", callback_data="reg:group")],
             [InlineKeyboardButton(text="Зарегистрироваться как страна", callback_data="reg:country")],
             [InlineKeyboardButton(text="Создать движение", callback_data="reg:movement")],
-            [InlineKeyboardButton(text="Создать партию", callback_data="reg:party")],
+            [InlineKeyboardButton(text="Создать партию", callback_data="reg:party_select")],
+        ]
+    )
+
+
+def _party_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Легальная партия", callback_data="reg:party_legal")],
+            [InlineKeyboardButton(text="Нелегальная партия", callback_data="reg:party_illegal")],
         ]
     )
 
@@ -226,20 +238,26 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
             return
         if action == "stats":
+            stats_text = await service.render_global_stats()
             day, week, month, total = await service.db.news_stats()
-            await callback.message.answer(
-                f"Общая статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
+            stats_text += (
+                f"\n\n<b>📰 Активность новостей</b>\n"
+                f"<i>За день:</i> {day}\n"
+                f"<i>За неделю:</i> {week}\n"
+                f"<i>За месяц:</i> {month}\n"
+                f"<i>За всё время:</i> {total}"
             )
+            await callback.message.answer(stats_text, parse_mode="HTML")
             return
         if action == "country_stats":
             rows = await service.db.list_country_stats()
             if not rows:
                 await callback.message.answer("Статистика стран: скоро (пока нет данных).")
             else:
-                lines = ["Статистика стран:"]
-                for country, budget, army, life in rows[:20]:
-                    lines.append(f"{country}: Бюджет={budget}, Армия={army}, Уровень жизни={life}")
-                await callback.message.answer("\n".join(lines))
+                user_countries = _user_allowed_countries(callback.from_user.id)
+                primary = user_countries[0] if user_countries else rows[0][0]
+                card = await service.render_country_stats_card(primary)
+                await callback.message.answer(card, parse_mode="HTML")
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)
@@ -357,12 +375,27 @@ def bind_admin_handlers(service: NewsService) -> Router:
     @router.callback_query(F.data.startswith("reg:"))
     async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
         _, reg_type = callback.data.split(":", maxsplit=1)
+        if reg_type == "party_select":
+            await state.set_state(RegistrationState.waiting_party_type)
+            await callback.message.answer("Выберите тип партии:", reply_markup=_party_type_keyboard())
+            await callback.answer()
+            return
+        has_locked_roles = await service.db.has_any_approved_registration(
+            callback.from_user.id,
+            ("country", "group", "movement", "party_legal", "party_illegal"),
+        )
+        if has_locked_roles and reg_type in {"country", "group", "movement", "party_legal", "party_illegal"}:
+            await callback.answer("У вас уже есть страна/структура. Нельзя создавать что-либо ещё.", show_alert=True)
+            return
         if await service.db.has_approved_registration(callback.from_user.id, reg_type):
             await callback.answer("Вы уже зарегистрированы в этой категории.", show_alert=True)
             return
-        if reg_type in {"movement", "party"}:
+        if reg_type in {"movement", "party_legal", "party_illegal"}:
             if await service.db.is_country_leader(callback.from_user.id):
                 await callback.answer("Недоступно: у вас уже есть страна/группировка.", show_alert=True)
+                return
+            if await service.db.has_any_approved_registration(callback.from_user.id, ("group", "movement", "party_legal", "party_illegal")):
+                await callback.answer("Недоступно: у вас уже есть страна/группировка. Новые регистрации запрещены.", show_alert=True)
                 return
         if reg_type not in REGISTRATION_TEMPLATES:
             await callback.answer("Неизвестный тип", show_alert=True)
@@ -398,6 +431,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
             f"Token: {token}\n\n"
             f"Анкета:\n{raw_form[:3500]}"
         )
+        if reg_type == "party_illegal":
+            admin_text += "\n\n⚠️ Нелегальная партия: утверждение только Верховным."
         await message.bot.send_message(config.admin_id, admin_text, reply_markup=_registration_review_keyboard(token))
 
         await state.clear()

@@ -85,11 +85,16 @@ class Database:
                     country TEXT PRIMARY KEY,
                     budget INTEGER NOT NULL DEFAULT 100000,
                     army INTEGER NOT NULL DEFAULT 1000,
+                    citizens INTEGER NOT NULL DEFAULT 100,
                     life_level INTEGER NOT NULL DEFAULT 50,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            try:
+                await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
 
     async def is_duplicate(self, content_hash: str) -> bool:
@@ -241,6 +246,18 @@ class Database:
             row = await cursor.fetchone()
         return row is not None
 
+    async def has_any_approved_registration(self, user_id: int, reg_types: tuple[str, ...]) -> bool:
+        if not reg_types:
+            return False
+        placeholders = ",".join(["?"] * len(reg_types))
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                f"SELECT 1 FROM registration_applications WHERE user_id = ? AND reg_type IN ({placeholders}) AND status = 'approved' LIMIT 1",
+                (user_id, *reg_types),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
     async def news_stats(self) -> tuple[int, int, int, int]:
         async with aiosqlite.connect(self.path) as db:
             total = await (await db.execute("SELECT COUNT(*) FROM processed_posts")).fetchone()
@@ -249,7 +266,14 @@ class Database:
             month = await (await db.execute("SELECT COUNT(*) FROM processed_posts WHERE created_at >= datetime('now','-30 day')")).fetchone()
         return int(day[0]), int(week[0]), int(month[0]), int(total[0])
 
-    async def apply_country_stats_delta(self, country: str, budget_delta: int = 0, army_delta: int = 0, life_delta: int = 0) -> None:
+    async def apply_country_stats_delta(
+        self,
+        country: str,
+        budget_delta: int = 0,
+        army_delta: int = 0,
+        life_delta: int = 0,
+        citizens_delta: int = 0,
+    ) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO country_stats (country) VALUES (?)",
@@ -259,26 +283,53 @@ class Database:
                 "UPDATE country_stats SET "
                 "budget = MAX(0, budget + ?), "
                 "army = MAX(0, army + ?), "
+                "citizens = MAX(0, citizens + ?), "
                 "life_level = MIN(100, MAX(0, life_level + ?)), "
                 "updated_at = CURRENT_TIMESTAMP "
                 "WHERE country = ?",
-                (budget_delta, army_delta, life_delta, country),
+                (budget_delta, army_delta, citizens_delta, life_delta, country),
             )
             await db.commit()
 
-    async def get_country_stats(self, country: str) -> tuple[int, int, int] | None:
+    async def get_country_stats(self, country: str) -> tuple[int, int, int, int] | None:
         async with aiosqlite.connect(self.path) as db:
             row = await (await db.execute(
-                "SELECT budget, army, life_level FROM country_stats WHERE country = ?",
+                "SELECT budget, army, citizens, life_level FROM country_stats WHERE country = ?",
                 (country,),
             )).fetchone()
         if not row:
             return None
-        return int(row[0]), int(row[1]), int(row[2])
+        return int(row[0]), int(row[1]), int(row[2]), int(row[3])
 
-    async def list_country_stats(self) -> list[tuple[str, int, int, int]]:
+    async def list_country_stats(self) -> list[tuple[str, int, int, int, int]]:
         async with aiosqlite.connect(self.path) as db:
             rows = await (await db.execute(
-                "SELECT country, budget, army, life_level FROM country_stats ORDER BY budget DESC, army DESC"
+                "SELECT country, budget, army, citizens, life_level FROM country_stats ORDER BY budget DESC, army DESC"
             )).fetchall()
-        return [(str(r[0]), int(r[1]), int(r[2]), int(r[3])) for r in rows]
+        return [(str(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows]
+
+    async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, payload in mapping.items():
+                cursor = await db.execute(
+                    """
+                    INSERT OR IGNORE INTO country_stats (country, budget, army, citizens, life_level)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        country,
+                        int(payload.get("budget", 100_000)),
+                        int(payload.get("army", 100)),
+                        int(payload.get("citizens", 100)),
+                        int(payload.get("life_level", 50)),
+                    ),
+                )
+                inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
+    async def get_country_population(self, country: str) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute("SELECT citizens FROM country_stats WHERE country = ?", (country,))).fetchone()
+        return int(row[0]) if row else 100

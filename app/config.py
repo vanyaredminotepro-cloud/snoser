@@ -238,6 +238,20 @@ class Config:
         }
     )
 
+    initial_country_stats: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {
+            "Триединая Русь": {"army": 420, "budget": 116_000, "citizens": 1800, "life_level": 62},
+            "Ось-Возмездия": {"army": 350, "budget": 105_000, "citizens": 1400, "life_level": 58},
+            "Обоссляндия": {"army": 180, "budget": 140_000, "citizens": 2200, "life_level": 66},
+            "ТНР": {"army": 175, "budget": 110_000, "citizens": 1200, "life_level": 57},
+            "Вилония": {"army": 172, "budget": 87_000, "citizens": 1150, "life_level": 55},
+            "Северландия": {"army": 150, "budget": 100_000, "citizens": 1000, "life_level": 56},
+            "Зитор": {"army": 137, "budget": 93_000, "citizens": 790, "life_level": 54},
+            "Аль-Нуурия": {"army": 90, "budget": 80_000, "citizens": 400, "life_level": 50},
+            "Белоярск": {"army": 58, "budget": 65_000, "citizens": 280, "life_level": 49},
+        }
+    )
+
 
 _load_dotenv_if_present()
 
