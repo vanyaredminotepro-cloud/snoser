@@ -146,6 +146,63 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS diplomatic_relations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country_a TEXT NOT NULL,
+                    country_b TEXT NOT NULL,
+                    relation_type TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(country_a, country_b, relation_type)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS technology_projects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    tech_name TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    complete_at INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'in_progress'
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS crisis_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    crisis_type TEXT NOT NULL,
+                    effect_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS economic_resources (
+                    country TEXT PRIMARY KEY,
+                    oil INTEGER NOT NULL DEFAULT 0,
+                    metal INTEGER NOT NULL DEFAULT 0,
+                    grain INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_missions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    day_key TEXT NOT NULL,
+                    mission_text TEXT NOT NULL,
+                    reward_budget INTEGER NOT NULL DEFAULT 0,
+                    reward_life INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
             try:
                 await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
             except aiosqlite.OperationalError:
@@ -470,4 +527,76 @@ class Database:
                 "INSERT INTO monthly_awards (month_key, award_name, country, value) VALUES (?, ?, ?, ?)",
                 (month_key, award_name, country, value),
             )
+            await db.commit()
+
+    async def add_or_update_relation(self, country_a: str, country_b: str, relation_type: str) -> None:
+        left, right = sorted([country_a, country_b])
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO diplomatic_relations (country_a, country_b, relation_type) VALUES (?, ?, ?)",
+                (left, right, relation_type),
+            )
+            await db.commit()
+
+    async def adjust_diplomacy_counter(self, country: str, alliances_delta: int = 0, treaties_delta: int = 0) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_diplomacy_stats (country, alliances, treaties) VALUES (?, 0, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE country_diplomacy_stats SET alliances = MAX(0, alliances + ?), treaties = MAX(0, treaties + ?), updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (alliances_delta, treaties_delta, country),
+            )
+            await db.commit()
+
+    async def start_technology_project(self, country: str, tech_name: str, started_at: int, complete_at: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO technology_projects (country, tech_name, started_at, complete_at, status) VALUES (?, ?, ?, ?, 'in_progress')",
+                (country, tech_name, started_at, complete_at),
+            )
+            await db.commit()
+
+    async def due_technology_projects(self, now_ts: int) -> list[tuple[int, str, str]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT id, country, tech_name FROM technology_projects WHERE status = 'in_progress' AND complete_at <= ?",
+                (now_ts,),
+            )).fetchall()
+            await db.execute(
+                "UPDATE technology_projects SET status = 'done' WHERE status = 'in_progress' AND complete_at <= ?",
+                (now_ts,),
+            )
+            await db.commit()
+        return [(int(r[0]), str(r[1]), str(r[2])) for r in rows]
+
+    async def log_crisis(self, country: str, crisis_type: str, effect_json: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO crisis_history (country, crisis_type, effect_json) VALUES (?, ?, ?)",
+                (country, crisis_type, effect_json),
+            )
+            await db.commit()
+
+    async def upsert_resources(self, country: str, oil: int, metal: int, grain: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO economic_resources (country, oil, metal, grain, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(country) DO UPDATE SET oil = excluded.oil, metal = excluded.metal, grain = excluded.grain, updated_at = CURRENT_TIMESTAMP
+                """,
+                (country, oil, metal, grain),
+            )
+            await db.commit()
+
+    async def set_daily_missions(self, day_key: str, missions: list[tuple[str, int, int]]) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM daily_missions WHERE day_key = ?", (day_key,))
+            for text, reward_budget, reward_life in missions:
+                await db.execute(
+                    "INSERT INTO daily_missions (day_key, mission_text, reward_budget, reward_life) VALUES (?, ?, ?, ?)",
+                    (day_key, text, reward_budget, reward_life),
+                )
             await db.commit()

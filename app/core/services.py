@@ -2,6 +2,7 @@ import asyncio
 import calendar
 import json
 import logging
+import random
 import re
 import time
 import uuid
@@ -153,6 +154,34 @@ class NewsService:
             premium_emoji_ids=config.premium_emoji_ids,
             country_aliases=config.country_aliases,
         )
+
+    @staticmethod
+    def _mentioned_countries(text: str, source_country: str) -> list[str]:
+        low = text.lower()
+        out: list[str] = []
+        for country, aliases in config.country_aliases.items():
+            if country == source_country:
+                continue
+            probes = [country.lower(), *(a.lower() for a in aliases)]
+            if any(p in low for p in probes):
+                out.append(country)
+        return out
+
+    async def _apply_diplomacy_and_tech(self, post: IncomingPost, text: str) -> None:
+        upper = text.upper()
+        mentions = self._mentioned_countries(text, post.source_country)
+        if any(tag in upper for tag in ["#СОЮЗ", "#ALLIANCE"]):
+            for country in mentions[:3]:
+                await self.db.add_or_update_relation(post.source_country, country, "alliance")
+                await self.db.adjust_diplomacy_counter(post.source_country, alliances_delta=1)
+        if any(tag in upper for tag in ["#ДОГОВОР", "#PACT", "#НЕНАПАДЕНИЕ"]):
+            for country in mentions[:3]:
+                await self.db.add_or_update_relation(post.source_country, country, "treaty")
+                await self.db.adjust_diplomacy_counter(post.source_country, treaties_delta=1)
+        if any(tag in upper for tag in ["#ТЕХНОЛОГИЯ", "#ИССЛЕДОВАНИЕ", "#РАЗРАБОТКА"]):
+            tech_name = re.sub(r"#\w+", "", text).strip()[:80] or "Неуточнённый проект"
+            now_ts = int(time.time())
+            await self.db.start_technology_project(post.source_country, tech_name, now_ts, now_ts + (3 * 24 * 3600))
 
     @staticmethod
     def _source_link(post: IncomingPost) -> str | None:
@@ -448,6 +477,10 @@ class NewsService:
             try:
                 due = await self.db.get_due_scheduled_posts(int(time.time()))
                 await self.publish_monthly_digest_if_due()
+                await self.run_daily_economy_cycle_if_due()
+                await self.run_weekly_crisis_cycle_if_due()
+                await self.publish_daily_missions_if_due()
+                await self.publish_completed_technologies()
                 for post_id, source_country, text in due:
                     fake_id = int(time.time()) + post_id
                     await self.enqueue(
@@ -463,6 +496,83 @@ class NewsService:
             except Exception:
                 logger.exception("Scheduler worker failed")
             await asyncio.sleep(max(1, config.scheduler_poll_seconds))
+
+    async def run_daily_economy_cycle_if_due(self) -> None:
+        day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        state_key = f"economy_cycle:{day_key}"
+        if await self.db.get_state(state_key, "0") == "1":
+            return
+        rows = await self.db.list_country_stats()
+        extra = await self.db.list_country_extra_metrics()
+        for country, budget, _, citizens, _ in rows:
+            territories = extra.get(country, {}).get("territories_month", 0)
+            income = (territories * 400) + max(0, citizens // 15)
+            oil = max(1, territories // 2)
+            metal = max(1, territories // 3)
+            grain = max(1, citizens // 120)
+            await self.db.apply_country_stats_delta(country, budget_delta=income)
+            await self.db.upsert_resources(country, oil, metal, grain)
+        await self.db.set_state(state_key, "1")
+
+    async def run_weekly_crisis_cycle_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        week_key = now.strftime("%G-W%V")
+        state_key = f"crisis_cycle:{week_key}"
+        if await self.db.get_state(state_key, "0") == "1":
+            return
+        rows = await self.db.list_country_stats()
+        extra = await self.db.list_country_extra_metrics()
+        for country, budget, army, citizens, life in rows:
+            stability = extra.get(country, {}).get("stability_index", 50)
+            army_pressure = 20 if army > 300 and citizens < 800 else 0
+            risk = min(95, max(0, (100 - stability) + army_pressure + (25 if life < 30 else 0)))
+            if risk < 70:
+                continue
+            if life < 30:
+                delta_citizens = -max(20, citizens // 10)
+                await self.db.apply_country_stats_delta(country, citizens_delta=delta_citizens, life_delta=-2)
+                await self.db.log_crisis(country, "mass_emigration", json.dumps({"citizens_delta": delta_citizens}))
+            elif army > 300 and citizens < 800:
+                await self.db.apply_country_stats_delta(country, army_delta=-max(20, army // 10), budget_delta=-5000, life_delta=-3)
+                await self.db.log_crisis(country, "military_coup", json.dumps({"army_penalty": True}))
+            else:
+                await self.db.apply_country_stats_delta(country, budget_delta=-(budget // 5), life_delta=-2)
+                await self.db.log_crisis(country, "economic_collapse", json.dumps({"budget_penalty_pct": 20}))
+        await self.db.set_state(state_key, "1")
+
+    async def publish_daily_missions_if_due(self) -> None:
+        day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        state_key = f"daily_missions:{day_key}"
+        if await self.db.get_state(state_key, "0") == "1":
+            return
+        mission_pool = [
+            ("Снять кадр строительства инфраструктуры", 2500, 1),
+            ("Опубликовать новость о дипломатических переговорах", 2000, 1),
+            ("Провести мобилизационный отчёт по правилам RP", 1500, 0),
+            ("Опубликовать экономический отчёт с цифрами", 1800, 1),
+            ("Сделать разведсводку с подтверждением", 2200, 1),
+        ]
+        missions = random.sample(mission_pool, k=3)
+        await self.db.set_daily_missions(day_key, missions)
+        await self.db.set_state(state_key, "1")
+
+    async def publish_completed_technologies(self) -> None:
+        due = await self.db.due_technology_projects(int(time.time()))
+        if not due:
+            return
+        for _, country, tech_name in due:
+            await self.db.apply_country_stats_delta(country, life_delta=1, budget_delta=3000)
+            text = (
+                "<blockquote>"
+                f"<b>🔬 Технология завершена:</b> <i>{country}</i>\n"
+                f"Проект: <b>{tech_name}</b>\n"
+                "Бонус: +3000 к бюджету и +1 к уровню жизни."
+                "</blockquote>"
+            )
+            if self.user_client:
+                await self.user_client.send_message(config.target_channel, text, parse_mode="html")
+            else:
+                await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
 
     async def rss_worker(self) -> None:
         if not config.rss_feeds:
@@ -547,6 +657,7 @@ class NewsService:
                 await self.send_to_moderation(post, corrected or "[MEDIA]", filter_result.reason, raw_text=corrected)
             return
 
+        await self._apply_diplomacy_and_tech(post, corrected)
         formatted, entities = self._render_post(post, corrected)
 
         if filter_result.reason == "MILITARY_REVIEW_REQUIRED":
