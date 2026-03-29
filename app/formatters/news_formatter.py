@@ -168,6 +168,29 @@ class NewsFormatter:
         body = self._normalize_sentence_case(body)
         return subject_raw, body
 
+    @staticmethod
+    def _is_feminine_subject(subject: str) -> bool:
+        low = subject.strip().lower()
+        return low.endswith(("ия", "а", "я", "ь"))
+
+    def _normalize_official_body(self, subject: str, body: str) -> str:
+        compact = body.strip()
+        if not compact:
+            return compact
+
+        feminine = self._is_feminine_subject(subject)
+        created_form = "создала" if feminine else "создал"
+
+        if re.search(r"(?i)\bофициально\b", compact):
+            compact = re.sub(r"(?i)^мы\s+(?=официально\s+созд)", "", compact).strip()
+            compact = re.sub(r"(?i)\bсоздали\b", created_form, compact, count=1)
+            compact = re.sub(r"(?i)\bсозда[её]м\b", created_form, compact, count=1)
+        else:
+            compact = re.sub(r"(?i)\bсоздали\b", "создает", compact, count=1)
+            compact = re.sub(r"(?i)\bсозда[её]м\b", "создает", compact, count=1)
+
+        return self._normalize_sentence_case(compact)
+
     def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()
         for candidate, tokens in self.emoji_rules.items():
@@ -298,6 +321,7 @@ class NewsFormatter:
         cleaned = self._compress(cleaned)
         aliases = (country_aliases or {}).get(country, [])
         subject, body = self._subjectify_if_possible(country, cleaned, aliases)
+        body = self._normalize_official_body(subject, body)
         headline, details = self._split_headline_details(body)
 
         emoji_char, emoji_id = self._emoji_char_and_id(headline, premium_emoji_ids)

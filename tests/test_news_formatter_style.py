@@ -50,3 +50,24 @@ def test_russian_hashtag_rewritten_to_english() -> None:
     )
     assert "#KK8" in text
     assert "#КК8" not in text
+
+
+def test_official_created_phrase_is_normalized() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Обоссляндия",
+        text="Обоссляндия Официально создаём новейшую версию ОЯТ\n\n#OBS",
+        country_hashtags={"Обоссляндия": ["#OBS"]},
+    )
+    assert "Обоссляндия официально создала новейшую версию оят".lower() in text.lower()
+
+
+def test_leading_we_after_country_is_removed() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Обоссляндия",
+        text="Обоссляндия Мы официально создали новейшую версию ОЯТ\n\n#OBS",
+        country_hashtags={"Обоссляндия": ["#OBS"]},
+    )
+    assert "Мы официально" not in text
+    assert "обоссляндия официально создала новейшую версию оят" in text.lower()
