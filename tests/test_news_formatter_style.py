@@ -71,3 +71,51 @@ def test_leading_we_after_country_is_removed() -> None:
     )
     assert "Мы официально" not in text
     assert "обоссляндия официально создала новейшую версию оят" in text.lower()
+
+
+def test_country_prefix_is_removed_if_country_is_already_in_body() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Вилония",
+        text='Подразделения морской пехоты Вилонии перебазированы в аванпост "Ягуар" в ТНР.',
+        country_hashtags={"Вилония": ["#VL"], "ТНР": ["#TNR"]},
+        country_aliases={"Вилония": ["вилония", "вилонии"]},
+    )
+    assert "🧭 Вилония Подразделения" not in text
+    assert "подразделения морской пехоты вилонии" in text.lower()
+
+
+def test_military_text_gets_non_default_eye_emoji() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Вилония",
+        text='Подразделения морской пехоты Вилонии перебазированы в аванпост "Ягуар" в ТНР.',
+        country_hashtags={"Вилония": ["#VL"], "ТНР": ["#TNR"]},
+        country_aliases={"Вилония": ["вилония", "вилонии"]},
+    )
+    first_char = text.split(" ", 1)[0]
+    assert first_char != "👀"
+
+
+def test_country_not_duplicated_when_already_in_text() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Вилония",
+        text='Подразделения морской пехоты Вилонии перебазированы в аванпост "Ягуар" в ТНР.\n\n#VL #TNR',
+        country_hashtags={"Вилония": ["#VL"], "ТНР": ["#TNR"]},
+        country_aliases={"Вилония": ["вилония", "вилонии"]},
+    )
+    first_line = text.splitlines()[0]
+    assert "Вилония Вилонии" not in first_line
+    assert "вилонии" in first_line.lower()
+
+
+def test_military_text_gets_non_default_emoji() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Вилония",
+        text='Подразделения морской пехоты перебазированы в аванпост "Ягуар". Размещены ракетные комплексы.',
+        country_hashtags={"Вилония": ["#VL"]},
+    )
+    first_line = text.splitlines()[0]
+    assert not first_line.startswith("👀 "), first_line

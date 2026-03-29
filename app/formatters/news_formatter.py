@@ -20,13 +20,19 @@ class NewsFormatter:
         "map": "🌐",
         "default": "👀",
     }
-    default_emoji_cycle = ["👀", "💭", "📈", "⚠️", "🌐", "❗️", "🛰️", "🏛️", "🧭", "🗞️", "📌", "🕰️", "🧱", "📣", "🛡️"]
+    default_emoji_cycle = [
+        "👀", "💭", "📈", "⚠️", "🌐", "❗️", "🛰️", "🏛️", "🧭", "🗞️", "📌", "🕰️", "🧱", "📣", "🛡️", "⚡", "✅", "📊", "📢",
+        "🔔", "🚨", "📰", "🗳️", "🧪", "🏗️", "🧰", "🔬", "💡", "🧩", "🔗", "🪙", "🏦", "💹", "📉", "💼", "🛠️", "🚧", "🪖",
+        "🧨", "🚀", "✈️", "🚁", "🛳️", "🗺️", "📍", "🧮", "📚", "🎯", "🧠", "📝", "🔍", "🔒", "🔓", "🪪", "🧾", "📦", "📨",
+        "📬", "⏱️", "⌛", "🧬", "⚙️", "🧫", "🏥", "🏫", "🏭", "🌉", "🛣️", "🏘️", "🌆", "🌍", "🌎", "🌏", "🤝", "🕊️", "🎖️",
+        "🏅", "🥇", "🔰", "🛟", "🧯", "🪫", "🔋", "💬", "🗣️", "🫡", "🧑‍💼", "🫱🏻‍🫲🏼", "📎", "🧷", "🧸", "🎙️", "📡",
+    ]
     emoji_variants = {
-        "important": ["❗️", "🚨", "📢", "📣", "🛎️", "🔔", "⚡", "🧨"],
-        "economy": ["📈", "💰", "🏦", "⚙️", "🧾", "💹", "🪙", "🏭"],
-        "diplomacy": ["💭", "🤝", "🕊️", "🗣️", "📜", "🏛️", "🪪", "🫱🏻‍🫲🏼"],
-        "warning": ["⚠️", "🛑", "🚫", "☣️", "❌", "⛔", "🧯", "🚨"],
-        "map": ["🌐", "🗺️", "📍", "🧭", "🛰️", "🛣️", "🏞️", "🧱"],
+        "important": ["❗️", "🚨", "📢", "📣", "🛎️", "🔔", "⚡", "🧨", "✅", "🎯", "📌", "📰"],
+        "economy": ["📈", "💰", "🏦", "⚙️", "🧾", "💹", "🪙", "🏭", "📊", "💼", "🧮", "📉"],
+        "diplomacy": ["💭", "🤝", "🕊️", "🗣️", "📜", "🏛️", "🪪", "🫱🏻‍🫲🏼", "💬", "🎙️", "📨", "📬"],
+        "warning": ["⚠️", "🛑", "🚫", "☣️", "❌", "⛔", "🧯", "🚨", "⚡", "🪖", "🛡️", "📣", "🔔", "📢"],
+        "map": ["🌐", "🗺️", "📍", "🧭", "🛰️", "🛣️", "🏞️", "🧱", "🌍", "🌎", "🌏", "📡"],
         "default": default_emoji_cycle,
     }
     emoji_to_key = {
@@ -42,9 +48,12 @@ class NewsFormatter:
     emoji_rules = {
         "economy": ["эконом", "бюджет", "инвест", "вкладывает", "финанс", "промышлен", "фабрик", "завод"],
         "diplomacy": ["сотруднич", "встреч", "переговор", "договор", "союз", "визит", "протокол", "дипломат"],
-        "warning": ["теракт", "болезн", "вирус", "mks20", "mks40", "чс", "угроз", "санкц", "обстрел", "штурм", "кризис", "эвакуац"],
+        "warning": [
+            "теракт", "болезн", "вирус", "mks20", "mks40", "чс", "угроз", "санкц", "обстрел", "штурм", "кризис", "эвакуац",
+            "ракет", "пехот", "перебазир", "аванпост", "комплекс", "гарнизон", "артиллери", "дивизион",
+        ],
         "map": ["карта", "map", "границ", "территор", "колонизац", "захват", "регион", "маршрут"],
-        "important": ["срочно", "важно", "экстренно", "‼"],
+        "important": ["срочно", "важно", "экстренно", "‼", "официально", "подтверждено", "подтверждаем"],
     }
     verb_replacements = {
         "начинаем": "начинает",
@@ -59,6 +68,35 @@ class NewsFormatter:
         "усиливаем": "усиливает",
         "запускаем": "запускает",
         "проводим": "проводит",
+        "вводим": "вводит",
+        "выпускаем": "выпускает",
+        "разрабатываем": "разрабатывает",
+        "подписываем": "подписывает",
+        "перебазируем": "перебазирует",
+        "размещаем": "размещает",
+        "переносим": "переносит",
+        "строим": "строит",
+        "открываем": "открывает",
+        "обновляем": "обновляет",
+        "модернизируем": "модернизирует",
+        "укрепляем": "укрепляет",
+        "формируем": "формирует",
+        "перевооружаем": "перевооружает",
+        "утверждаем": "утверждает",
+        "назначаем": "назначает",
+        "реформируем": "реформирует",
+        "финансируем": "финансирует",
+        "инвестируем": "инвестирует",
+        "тестируем": "тестирует",
+        "испытываем": "испытывает",
+        "публикуем": "публикует",
+        "фиксируем": "фиксирует",
+        "контролируем": "контролирует",
+        "координируем": "координирует",
+        "направляем": "направляет",
+        "расширяем": "расширяет",
+        "согласовываем": "согласовывает",
+        "подтверждаем": "подтверждает",
     }
     signature_patterns = [
         re.compile(r"^\s*[—-]\s*(командован|пресс-служб).*$", re.IGNORECASE),
@@ -120,6 +158,40 @@ class NewsFormatter:
             n = re.escape(name)
             body = re.sub(rf"^\s*{n}\b[:\-\s]*", "", body, flags=re.IGNORECASE)
         return (country, body) if body else (country, text.strip())
+
+    def _body_mentions_country(self, body: str, country: str, aliases: list[str] | None = None) -> bool:
+        low_body = self._normalize(body)
+        probes: set[str] = {self._normalize(country)}
+        for alias in aliases or []:
+            probes.add(self._normalize(alias))
+
+        country_low = self._normalize(country)
+        if len(country_low) > 4:
+            probes.add(country_low[:-1])
+            probes.add(country_low[:-2])
+            if country_low.endswith("ия"):
+                probes.add(f"{country_low[:-2]}ии")
+                probes.add(f"{country_low[:-2]}ию")
+
+        for probe in probes:
+            if len(probe) >= 4 and probe in low_body:
+                return True
+        return False
+
+    def _contains_country_reference(self, text: str, country: str, aliases: list[str] | None = None) -> bool:
+        low = self._normalize(text)
+        probes = [country, *(aliases or [])]
+        for probe in probes:
+            p = self._normalize(probe)
+            if not p:
+                continue
+            if p in low:
+                return True
+            if p.endswith(("ия", "а", "я", "ь")):
+                stem = p[:-1]
+                if len(stem) >= 4 and stem in low:
+                    return True
+        return False
 
     def _normalize_sentence_case(self, text: str) -> str:
         if not text:
@@ -185,6 +257,7 @@ class NewsFormatter:
             compact = re.sub(r"(?i)^мы\s+(?=официально\s+созд)", "", compact).strip()
             compact = re.sub(r"(?i)\bсоздали\b", created_form, compact, count=1)
             compact = re.sub(r"(?i)\bсозда[её]м\b", created_form, compact, count=1)
+            compact = re.sub(r"(?i)\bсоздает\b", created_form, compact, count=1)
         else:
             compact = re.sub(r"(?i)\bсоздали\b", "создает", compact, count=1)
             compact = re.sub(r"(?i)\bсозда[её]м\b", "создает", compact, count=1)
@@ -322,11 +395,16 @@ class NewsFormatter:
         aliases = (country_aliases or {}).get(country, [])
         subject, body = self._subjectify_if_possible(country, cleaned, aliases)
         body = self._normalize_official_body(subject, body)
+        if self._body_mentions_country(body, country, aliases):
+            subject = ""
         headline, details = self._split_headline_details(body)
+        include_subject = not self._contains_country_reference(body, country, aliases)
+        visible_subject = subject if include_subject else ""
 
         emoji_char, emoji_id = self._emoji_char_and_id(headline, premium_emoji_ids)
 
-        lines = [f"{emoji_char} {subject} {headline}".strip()]
+        prefix = f"{emoji_char} {visible_subject}".strip()
+        lines = [f"{prefix} {headline}".strip()]
         if details:
             lines.append(details.strip())
 
@@ -345,11 +423,11 @@ class NewsFormatter:
             entities.append(MessageEntityCustomEmoji(offset=0, length=self._utf16_len(emoji_char), document_id=emoji_id))
 
         country_start = self._utf16_len(f"{emoji_char} ")
-        country_len = self._utf16_len(subject)
+        country_len = self._utf16_len(visible_subject)
         if country_len > 0:
             entities.append(MessageEntityBold(offset=country_start, length=country_len))
 
-        body_start = self._utf16_len(f"{emoji_char} {subject} ")
+        body_start = self._utf16_len(f"{prefix} ")
         body_len = self._utf16_len(l1) - body_start
         if body_len > 0:
             entities.append(MessageEntityItalic(offset=body_start, length=body_len))
