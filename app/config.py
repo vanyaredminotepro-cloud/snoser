@@ -71,6 +71,9 @@ class Config:
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
+    antiflood_window: int = 10
+    antiflood_max_actions: int = 5
+    antiflood_ban_duration: int = 300
     scheduler_poll_seconds: int = 5
     rss_poll_seconds: int = 45
     war_digest_threshold: int = 4
@@ -235,6 +238,34 @@ class Config:
             "Крелония": [5862738376],
             "Зитор": [6364324300],
             'Орден "ГНЕВ"': [8318664912],
+        }
+    )
+
+    initial_country_stats: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {
+            "Триединая Русь": {"army": 420, "budget": 116_000, "citizens": 1800, "life_level": 62},
+            "Ось-Возмездия": {"army": 350, "budget": 105_000, "citizens": 1400, "life_level": 58},
+            "Обоссляндия": {"army": 180, "budget": 140_000, "citizens": 2200, "life_level": 66},
+            "ТНР": {"army": 175, "budget": 110_000, "citizens": 1200, "life_level": 57},
+            "Вилония": {"army": 172, "budget": 87_000, "citizens": 1150, "life_level": 55},
+            "Северландия": {"army": 150, "budget": 100_000, "citizens": 1000, "life_level": 56},
+            "Зитор": {"army": 137, "budget": 93_000, "citizens": 790, "life_level": 54},
+            "Аль-Нуурия": {"army": 90, "budget": 80_000, "citizens": 400, "life_level": 50},
+            "Белоярск": {"army": 58, "budget": 65_000, "citizens": 280, "life_level": 49},
+        }
+    )
+
+    initial_country_extra_metrics: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {
+            "Обоссляндия": {"territories_month": 12, "alliances": 3, "treaties": 2, "stability_index": 92, "quality_percent": 94},
+            "Триединая Русь": {"territories_month": 8, "alliances": 4, "treaties": 2, "stability_index": 78, "quality_percent": 85},
+            "Ось-Возмездия": {"territories_month": 2, "alliances": 5, "treaties": 1, "stability_index": 55, "quality_percent": 60},
+            "ТНР": {"territories_month": 3, "alliances": 2, "treaties": 1, "stability_index": 75, "quality_percent": 89},
+            "Вилония": {"territories_month": 6, "alliances": 3, "treaties": 1, "stability_index": 48, "quality_percent": 65},
+            "Северландия": {"territories_month": 5, "alliances": 2, "treaties": 1, "stability_index": 70, "quality_percent": 82},
+            "Зитор": {"territories_month": 4, "alliances": 1, "treaties": 1, "stability_index": 68, "quality_percent": 80},
+            "Аль-Нуурия": {"territories_month": 2, "alliances": 1, "treaties": 0, "stability_index": 65, "quality_percent": 78},
+            "Белоярск": {"territories_month": 1, "alliances": 0, "treaties": 0, "stability_index": 60, "quality_percent": 75},
         }
     )
 

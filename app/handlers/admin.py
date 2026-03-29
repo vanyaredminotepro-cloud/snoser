@@ -31,6 +31,9 @@ class AdminState(StatesGroup):
     waiting_appeal = State()
     waiting_tag_update = State()
     waiting_source_update = State()
+    waiting_unflood_user = State()
+    waiting_user_manage_target = State()
+    waiting_user_ban_reason = State()
 
 
 def _extract_media(message: Message) -> tuple[str | None, str | None]:
@@ -124,7 +127,8 @@ REG_TYPE_LABELS = {
     "group": "Группировка",
     "country": "Страна",
     "movement": "Движение",
-    "party": "Партия",
+    "party_legal": "Легальная партия",
+    "party_illegal": "Нелегальная партия",
 }
 
 REGISTRATION_TEMPLATES = {
@@ -132,7 +136,8 @@ REGISTRATION_TEMPLATES = {
     "group": """Шаблон анкеты для группировки:\n\n1. Префикс группировки (ЧВК, ДШРГ и т.д.)\n2. Название и полное звучание\n3. Зависимая/независимая\n4. Задачи группировки\n5. Численность (20-40)\n6. Позывной командира\n7. Страна базирования (если зависима)\n8. Бюджет (20-35 тыс. вирт-рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
     "person": """Шаблон анкеты для известного человека:\n\n1. Ненастоящее имя/позывной\n2. Страна деятельности\n3. С чем связана деятельность\n4. Работа\n5. Деньги (10-15 тыс. вирт рублей)\n\nОтправьте заполненную анкету одним сообщением.""",
     "movement": """Шаблон анкеты для движения:\n\n1. Название движения\n2. Идеология/цель\n3. Лидер\n4. Страна деятельности\n5. Краткий план действий\n\nОтправьте заполненную анкету одним сообщением.""",
-    "party": """Шаблон анкеты для партии:\n\n1. Название партии\n2. Лидер партии\n3. Политическая программа\n4. Страна деятельности\n5. Цели на ближайший период\n\nОтправьте заполненную анкету одним сообщением.""",
+    "party_legal": """Шаблон анкеты для ЛЕГАЛЬНОЙ партии:\n\n1. Название партии\n2. Лидер партии\n3. Политическая программа\n4. Страна деятельности\n5. Цели на ближайший период\n6. Подтверждение согласования с президентом страны\n\nОтправьте заполненную анкету одним сообщением.""",
+    "party_illegal": """Шаблон анкеты для НЕЛЕГАЛЬНОЙ партии:\n\n1. Название партии\n2. Лидер подпольной структуры\n3. Идеология/цель\n4. Страна деятельности\n5. Методы действий (без нарушения OOC/реал-правил)\n6. Обоснование, почему регистрация должна идти через Верховного\n\nВажно: нелегальные партии утверждаются только Верховным (главой РП).""",
 }
 
 
@@ -143,7 +148,16 @@ def _registration_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Зарегистрироваться как группировка", callback_data="reg:group")],
             [InlineKeyboardButton(text="Зарегистрироваться как страна", callback_data="reg:country")],
             [InlineKeyboardButton(text="Создать движение", callback_data="reg:movement")],
-            [InlineKeyboardButton(text="Создать партию", callback_data="reg:party")],
+            [InlineKeyboardButton(text="Создать партию", callback_data="reg:party_select")],
+        ]
+    )
+
+
+def _party_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Легальная партия", callback_data="reg:party_legal")],
+            [InlineKeyboardButton(text="Нелегальная партия", callback_data="reg:party_illegal")],
         ]
     )
 
@@ -165,10 +179,11 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Статус", callback_data="admin:status")],
             [InlineKeyboardButton(text="Статистика новостей", callback_data="admin:news_stats")],
             [InlineKeyboardButton(text="Пауза", callback_data="admin:pause"), InlineKeyboardButton(text="Резюме", callback_data="admin:resume")],
-            [InlineKeyboardButton(text="Написать новость", callback_data="admin:write_news")],
-            [InlineKeyboardButton(text="Анкеты", callback_data="admin:anketa")],
             [InlineKeyboardButton(text="Хештеги (добавить/изменить)", callback_data="admin:tags")],
             [InlineKeyboardButton(text="Организации/источники", callback_data="admin:sources")],
+            [InlineKeyboardButton(text="Управление пользователями", callback_data="admin:user_mgmt")],
+            [InlineKeyboardButton(text="Снять блокировку с пользователя", callback_data="admin:unflood_user")],
+            [InlineKeyboardButton(text="Список банов", callback_data="admin:list_bans")],
             [InlineKeyboardButton(text="HTML исследование (beta)", callback_data="admin:html_probe")],
             [InlineKeyboardButton(text="Emoji reload", callback_data="admin:emoji_reload")],
         ]
@@ -201,8 +216,48 @@ def _extract_country_name_from_form(form_text: str) -> str:
 
 
 def bind_admin_handlers(service: NewsService) -> Router:
+    async def _resolve_user_id(bot, raw: str) -> int | None:
+        value = raw.strip()
+        if re.fullmatch(r"\d{5,15}", value):
+            return int(value)
+        if value.startswith("@"):
+            try:
+                chat = await bot.get_chat(value)
+                if getattr(chat, "id", None):
+                    return int(chat.id)
+            except Exception:
+                return None
+        return None
+
+    async def _guard_message(message: Message) -> bool:
+        if not message.from_user:
+            return False
+        ok, reason = await service.check_user_access(message.from_user.id, is_callback=False)
+        if not ok:
+            await message.answer(reason)
+            await message.bot.send_message(
+                config.admin_id,
+                f"🛡 Антифлуд/бан: message user={message.from_user.id} @{message.from_user.username or 'none'}\nПричина: {reason}",
+            )
+            return False
+        return True
+
+    async def _guard_callback(callback: CallbackQuery) -> bool:
+        user_id = callback.from_user.id
+        ok, reason = await service.check_user_access(user_id, is_callback=True)
+        if not ok:
+            await callback.answer(reason, show_alert=True)
+            await callback.message.bot.send_message(
+                config.admin_id,
+                f"🛡 Антифлуд/бан: callback user={user_id} @{callback.from_user.username or 'none'}\nПричина: {reason}",
+            )
+            return False
+        return True
+
     @router.message(F.text == "/start")
     async def start_cmd(message: Message) -> None:
+        if not await _guard_message(message):
+            return
         is_admin = bool(message.from_user and message.from_user.id == config.admin_id)
         text = (
             "Бот активен.\n"
@@ -213,6 +268,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.callback_query(F.data.startswith("menu:"))
     async def menu_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         action = callback.data.split(":", maxsplit=1)[1]
         is_admin = callback.from_user.id == config.admin_id
         await callback.answer()
@@ -226,20 +283,26 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
             return
         if action == "stats":
+            stats_text = await service.render_global_stats()
             day, week, month, total = await service.db.news_stats()
-            await callback.message.answer(
-                f"Общая статистика новостей\nЗа день: {day}\nЗа неделю: {week}\nЗа месяц: {month}\nЗа всё время: {total}"
+            stats_text += (
+                f"\n\n<b>📰 Активность новостей</b>\n"
+                f"<i>За день:</i> {day}\n"
+                f"<i>За неделю:</i> {week}\n"
+                f"<i>За месяц:</i> {month}\n"
+                f"<i>За всё время:</i> {total}"
             )
+            await callback.message.answer(stats_text, parse_mode="HTML")
             return
         if action == "country_stats":
             rows = await service.db.list_country_stats()
             if not rows:
                 await callback.message.answer("Статистика стран: скоро (пока нет данных).")
             else:
-                lines = ["Статистика стран:"]
-                for country, budget, army, life in rows[:20]:
-                    lines.append(f"{country}: Бюджет={budget}, Армия={army}, Уровень жизни={life}")
-                await callback.message.answer("\n".join(lines))
+                user_countries = _user_allowed_countries(callback.from_user.id)
+                primary = user_countries[0] if user_countries else rows[0][0]
+                card = await service.render_country_stats_card(primary)
+                await callback.message.answer(card, parse_mode="HTML")
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)
@@ -254,6 +317,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.callback_query(F.data.startswith("admin:"))
     async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -273,11 +338,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         elif action == "resume":
             await service.set_paused(False)
             await callback.message.answer("Пауза отключена")
-        elif action == "write_news":
-            await state.set_state(WriteNewsState.waiting_text)
-            await callback.message.answer("Отправьте текст/медиа новости с хештегом страны.")
-        elif action == "anketa":
-            await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
         elif action == "tags":
             await state.set_state(AdminState.waiting_tag_update)
             await callback.message.answer(
@@ -298,9 +358,26 @@ def bind_admin_handlers(service: NewsService) -> Router:
         elif action == "emoji_reload":
             count = await service.refresh_emoji_packs()
             await callback.message.answer(f"Emoji packs reloaded: {count}")
+        elif action == "unflood_user":
+            await state.set_state(AdminState.waiting_unflood_user)
+            await callback.message.answer("Введите user_id для снятия антифлуд-блокировки.")
+        elif action == "user_mgmt":
+            await state.set_state(AdminState.waiting_user_manage_target)
+            await callback.message.answer("Введите @username или user_id пользователя для бана/разбана.")
+        elif action == "list_bans":
+            rows = await service.db.list_user_bans(limit=25)
+            if not rows:
+                await callback.message.answer("Список банов пуст.")
+            else:
+                lines = ["Забаненные пользователи:"]
+                for user_id, banned_at, reason, banned_by in rows:
+                    lines.append(f"{user_id} | by={banned_by} | reason={reason or '-'}")
+                await callback.message.answer("\n".join(lines[:30]))
 
     @router.message(AdminState.waiting_tag_update)
     async def tag_update_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         if not message.from_user or message.from_user.id != config.admin_id:
             return
         raw = (message.text or "").strip()
@@ -320,6 +397,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(AdminState.waiting_source_update)
     async def source_update_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         if not message.from_user or message.from_user.id != config.admin_id:
             return
         raw = (message.text or "").strip()
@@ -330,7 +409,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         source = source_raw
         source = re.sub(r"^https?://t.me/", "", source, flags=re.IGNORECASE).strip()
         if source and not source.startswith("+") and not source.startswith("@"):
-            source = source
+            source = f"@{source}"
         if not org or not source:
             await message.answer("Пустое название организации или источника.")
             return
@@ -341,6 +420,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(AdminState.waiting_appeal)
     async def appeal_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         text = (message.text or "").strip()
         if not text:
             await message.answer("Текст апелляции пуст.")
@@ -354,15 +435,107 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer("Апелляция отправлена админу.")
         await state.clear()
 
+    @router.message(AdminState.waiting_unflood_user)
+    async def unflood_user_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        if not message.from_user or message.from_user.id != config.admin_id:
+            return
+        uid = await _resolve_user_id(message.bot, (message.text or "").strip())
+        if not uid:
+            await message.answer("Не удалось распознать пользователя. Нужен user_id или публичный @username.")
+            return
+        await service.db.clear_antiflood_ban(uid)
+        await message.answer(f"Антифлуд-блокировка снята: {uid}")
+        await message.bot.send_message(config.admin_id, f"✅ Снята антифлуд-блокировка с {uid}")
+        await state.clear()
+
+    @router.message(AdminState.waiting_user_manage_target)
+    async def user_mgmt_target_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        if not message.from_user or message.from_user.id != config.admin_id:
+            return
+        uid = await _resolve_user_id(message.bot, (message.text or "").strip())
+        if not uid:
+            await message.answer("Не удалось распознать пользователя. Нужен user_id или публичный @username.")
+            return
+        await state.update_data(manage_user_id=uid)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Забанить", callback_data="usermgmt:ban")],
+                [InlineKeyboardButton(text="Разбанить", callback_data="usermgmt:unban")],
+            ]
+        )
+        await message.answer(f"Пользователь: {uid}. Выберите действие:", reply_markup=kb)
+
+    @router.callback_query(F.data.startswith("usermgmt:"))
+    async def user_mgmt_action_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
+        if callback.from_user.id != config.admin_id:
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        action = callback.data.split(":", maxsplit=1)[1]
+        data = await state.get_data()
+        uid = int(data.get("manage_user_id", 0))
+        if not uid:
+            await callback.answer("Сначала укажите пользователя", show_alert=True)
+            return
+        if action == "ban":
+            await state.set_state(AdminState.waiting_user_ban_reason)
+            await callback.message.answer("Введите причину бана одним сообщением.")
+            await callback.answer()
+            return
+        await service.db.unban_user(uid)
+        await callback.message.answer(f"Пользователь {uid} разбанен.")
+        await callback.message.bot.send_message(config.admin_id, f"✅ Разбан: {uid} (admin={callback.from_user.id})")
+        await state.clear()
+        await callback.answer()
+
+    @router.message(AdminState.waiting_user_ban_reason)
+    async def user_ban_reason_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        if not message.from_user or message.from_user.id != config.admin_id:
+            return
+        data = await state.get_data()
+        uid = int(data.get("manage_user_id", 0))
+        if not uid:
+            await message.answer("Не найден пользователь для бана.")
+            await state.clear()
+            return
+        reason = (message.text or "").strip() or "Без причины"
+        await service.db.ban_user(uid, banned_by=message.from_user.id, reason=reason)
+        await message.answer(f"Пользователь {uid} забанен.")
+        await message.bot.send_message(config.admin_id, f"⛔ Бан: {uid} (admin={message.from_user.id})\nПричина: {reason}")
+        await state.clear()
+
     @router.callback_query(F.data.startswith("reg:"))
     async def registration_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         _, reg_type = callback.data.split(":", maxsplit=1)
+        if reg_type == "party_select":
+            await callback.message.answer("Выберите тип партии:", reply_markup=_party_type_keyboard())
+            await callback.answer()
+            return
+        has_locked_roles = await service.db.has_any_approved_registration(
+            callback.from_user.id,
+            ("country", "group", "movement", "party_legal", "party_illegal"),
+        )
+        if has_locked_roles and reg_type in {"country", "group", "movement", "party_legal", "party_illegal"}:
+            await callback.answer("У вас уже есть страна/структура. Нельзя создавать что-либо ещё.", show_alert=True)
+            return
         if await service.db.has_approved_registration(callback.from_user.id, reg_type):
             await callback.answer("Вы уже зарегистрированы в этой категории.", show_alert=True)
             return
-        if reg_type in {"movement", "party"}:
+        if reg_type in {"movement", "party_legal", "party_illegal"}:
             if await service.db.is_country_leader(callback.from_user.id):
                 await callback.answer("Недоступно: у вас уже есть страна/группировка.", show_alert=True)
+                return
+            if await service.db.has_any_approved_registration(callback.from_user.id, ("group", "movement", "party_legal", "party_illegal")):
+                await callback.answer("Недоступно: у вас уже есть страна/группировка. Новые регистрации запрещены.", show_alert=True)
                 return
         if reg_type not in REGISTRATION_TEMPLATES:
             await callback.answer("Неизвестный тип", show_alert=True)
@@ -375,6 +548,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(RegistrationState.waiting_form)
     async def registration_form_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         raw_form = (message.text or message.caption or "").strip()
         if not raw_form:
             await message.answer("Отправьте анкету текстом одним сообщением.")
@@ -398,17 +573,17 @@ def bind_admin_handlers(service: NewsService) -> Router:
             f"Token: {token}\n\n"
             f"Анкета:\n{raw_form[:3500]}"
         )
+        if reg_type == "party_illegal":
+            admin_text += "\n\n⚠️ Нелегальная партия: утверждение только Верховным."
         await message.bot.send_message(config.admin_id, admin_text, reply_markup=_registration_review_keyboard(token))
-
-        if reg_type == "country" and user_id:
-            country_name = _extract_country_name_from_form(raw_form)
-            await service.db.add_country_leader(country_name, user_id, source="registration")
 
         await state.clear()
         await message.answer("Анкета отправлена админу в ЛС (@supermegaluti).")
 
     @router.callback_query(F.data.startswith("regmod:"))
     async def registration_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -424,6 +599,9 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
         if action == "approve":
             await service.db.set_registration_application_status(token, "approved")
+            if reg_type == "country" and user_id:
+                country_name = _extract_country_name_from_form(form_text)
+                await service.db.add_country_leader(country_name, user_id, source="registration")
             await callback.message.answer("Анкета принята")
             await callback.message.bot.send_message(user_id, f"Ваша анкета ({REG_TYPE_LABELS.get(reg_type, reg_type)}) принята администратором.")
         else:
@@ -434,6 +612,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(AdminState.waiting_registration_reject_reason)
     async def registration_reject_reason(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         if not message.from_user or message.from_user.id != config.admin_id:
             return
         reason = (message.text or "").strip()
@@ -454,6 +634,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
 
     @router.message(WriteNewsState.waiting_text)
     async def write_news_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         text = _normalize_hashtags_to_english((message.caption or message.text or "").strip())
         state_data = await state.get_data()
         pending_text = str(state_data.get("pending_news_text", "")).strip()
@@ -511,6 +693,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer("Принято в очередь")
     @router.callback_query(F.data.startswith("mod:"))
     async def moderation_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         if callback.from_user.id != config.admin_id:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -555,17 +739,19 @@ def bind_admin_handlers(service: NewsService) -> Router:
             return
 
         if action == "reject":
-            await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await service.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
             await callback.message.answer("Отклонено")
             return
 
         if action == "war_block":
-            await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await service.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
             await callback.message.answer("Классифицировано как военные действия: отклонено")
             return
 
     @router.message(AdminState.waiting_moderation_fix)
     async def moderation_fix_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
         if not message.from_user or message.from_user.id != config.admin_id:
             return
         data = await state.get_data()
