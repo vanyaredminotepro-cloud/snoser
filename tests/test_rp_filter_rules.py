@@ -28,3 +28,13 @@ def test_final_weapon_rules_matrix() -> None:
     for text, expected_allowed in cases:
         result = f.check(text, known_countries=known_countries, known_hashtags=known_hashtags)
         assert result.allowed is expected_allowed, f"{text} -> {result}"
+
+
+def test_russian_country_hashtag_is_accepted() -> None:
+    f = RPFilter()
+    result = f.check(
+        "Обоссляндия начинает реформу #ОБС",
+        known_countries={"обоссляндия"},
+        known_hashtags={"#OBS", "#RP"},
+    )
+    assert result.allowed is True, result

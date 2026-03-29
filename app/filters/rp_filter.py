@@ -10,6 +10,13 @@ class FilterResult:
 
 
 class RPFilter:
+    hashtag_translit_map = str.maketrans({
+        "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E", "Ж": "ZH", "З": "Z", "И": "I", "Й": "Y",
+        "К": "K", "Л": "L", "М": "M", "Н": "N", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U", "Ф": "F",
+        "Х": "H", "Ц": "TS", "Ч": "CH", "Ш": "SH", "Щ": "SCH", "Ъ": "", "Ы": "Y", "Ь": "", "Э": "E", "Ю": "YU", "Я": "YA",
+        "І": "I", "Ї": "I", "Ґ": "G",
+    })
+
     military_roots = {
         "войн", "атак", "штурм", "фронт", "войск", "укреп", "удар", "операци", "наступ", "обстрел", "боев", "воен",
         "мобилизац", "контрнаступ", "спецназ", "границ", "патрул", "дрон", "миномет", "снайпер", "рэб",
@@ -103,6 +110,20 @@ class RPFilter:
     def _extract_hashtags(text: str) -> set[str]:
         return {f"#{m.upper()}" for m in re.findall(r"#([A-Za-zА-Яа-я0-9_]{2,})", text)}
 
+    @classmethod
+    def _latinize_hashtag(cls, tag: str) -> str:
+        if not tag:
+            return tag
+        normalized = tag.upper()
+        if not normalized.startswith("#"):
+            normalized = f"#{normalized}"
+        return f"#{normalized[1:].translate(cls.hashtag_translit_map)}"
+
+    @classmethod
+    def _hashtag_variants(cls, tag: str) -> set[str]:
+        normalized = tag.upper() if tag.startswith("#") else f"#{tag.upper()}"
+        return {normalized, cls._latinize_hashtag(normalized)}
+
     @staticmethod
     def _extract_army_values(text: str) -> list[int]:
         values = [int(v) for v in re.findall(r"\b(\d{1,5})\s*(?:солдат|бойц|военн\w*)", text.lower())]
@@ -144,7 +165,16 @@ class RPFilter:
 
         if known_hashtags:
             incoming_tags = self._extract_hashtags(text)
-            unknown_tags = [t for t in incoming_tags if t not in known_hashtags and len(t) >= 3]
+            normalized_known: set[str] = set()
+            for tag in known_hashtags:
+                normalized_known |= self._hashtag_variants(tag)
+
+            unknown_tags = []
+            for tag in incoming_tags:
+                if len(tag) < 3:
+                    continue
+                if self._hashtag_variants(tag).isdisjoint(normalized_known):
+                    unknown_tags.append(tag)
             if unknown_tags:
                 return FilterResult(False, "UNKNOWN_COUNTRY_HASHTAG", f"неизвестные хештеги: {', '.join(sorted(unknown_tags)[:3])}")
 

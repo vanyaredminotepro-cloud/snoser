@@ -39,3 +39,14 @@ def test_keep_we_sentence_without_forced_subject() -> None:
         country_hashtags={"Обоссляндия": ["#OBS"]},
     )
     assert "Мы начинаем строительство завода." in text
+
+
+def test_russian_hashtag_rewritten_to_english() -> None:
+    fmt = NewsFormatter()
+    text, _ = fmt.format_news_entities(
+        country="Кермания",
+        text="Кермания начинает маневры. #КК8",
+        country_hashtags={"Кермания": ["#KK8", "#КК8"]},
+    )
+    assert "#KK8" in text
+    assert "#КК8" not in text

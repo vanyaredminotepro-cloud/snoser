@@ -5,6 +5,13 @@ from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, Messag
 
 
 class NewsFormatter:
+    hashtag_translit_map = str.maketrans({
+        "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E", "Ж": "ZH", "З": "Z", "И": "I", "Й": "Y",
+        "К": "K", "Л": "L", "М": "M", "Н": "N", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U", "Ф": "F",
+        "Х": "H", "Ц": "TS", "Ч": "CH", "Ш": "SH", "Щ": "SCH", "Ъ": "", "Ы": "Y", "Ь": "", "Э": "E", "Ю": "YU", "Я": "YA",
+        "І": "I", "Ї": "I", "Ґ": "G",
+    })
+
     paragraph_emoji_fallback = {
         "important": "❗️",
         "economy": "📈",
@@ -234,6 +241,50 @@ class NewsFormatter:
 
         return " ".join(dict.fromkeys(tags))
 
+    @classmethod
+    def _latinize_hashtag(cls, tag: str) -> str:
+        normalized = tag.strip().upper()
+        if not normalized:
+            return normalized
+        if not normalized.startswith("#"):
+            normalized = f"#{normalized}"
+        return f"#{normalized[1:].translate(cls.hashtag_translit_map)}"
+
+    @classmethod
+    def _canonical_hashtag_map(cls, tags_map: dict[str, list[str]]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for values in tags_map.values():
+            if not values:
+                continue
+            canonical = str(values[0]).strip().upper()
+            if not canonical.startswith("#"):
+                canonical = f"#{canonical}"
+            out[canonical] = canonical
+            out[cls._latinize_hashtag(canonical)] = canonical
+            for raw in values[1:]:
+                alias = str(raw).strip().upper()
+                if not alias:
+                    continue
+                if not alias.startswith("#"):
+                    alias = f"#{alias}"
+                out[alias] = canonical
+                out[cls._latinize_hashtag(alias)] = canonical
+        return out
+
+    @classmethod
+    def _canonicalize_explicit_tags(cls, tags: list[str], tags_map: dict[str, list[str]]) -> list[str]:
+        aliases = cls._canonical_hashtag_map(tags_map)
+        normalized: list[str] = []
+        for raw in tags:
+            tag = raw.strip().upper()
+            if not tag:
+                continue
+            if not tag.startswith("#"):
+                tag = f"#{tag}"
+            canonical = aliases.get(tag) or aliases.get(cls._latinize_hashtag(tag)) or cls._latinize_hashtag(tag)
+            normalized.append(canonical)
+        return list(dict.fromkeys(normalized))
+
     def format_news_entities(
         self,
         country: str,
@@ -243,6 +294,7 @@ class NewsFormatter:
         country_aliases: dict[str, list[str]] | None = None,
     ) -> tuple[str, list]:
         cleaned, explicit_tags = self._cleanup_text(text)
+        explicit_tags = self._canonicalize_explicit_tags(explicit_tags, country_hashtags)
         cleaned = self._compress(cleaned)
         aliases = (country_aliases or {}).get(country, [])
         subject, body = self._subjectify_if_possible(country, cleaned, aliases)
