@@ -12,12 +12,17 @@ class Database:
                 CREATE TABLE IF NOT EXISTS processed_posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_chat TEXT NOT NULL,
+                    source_country TEXT NOT NULL DEFAULT 'MANUAL',
                     message_id INTEGER NOT NULL,
                     content_hash TEXT NOT NULL UNIQUE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            try:
+                await db.execute("ALTER TABLE processed_posts ADD COLUMN source_country TEXT NOT NULL DEFAULT 'MANUAL'")
+            except aiosqlite.OperationalError:
+                pass
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS app_state (
@@ -91,6 +96,56 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_territory_progress (
+                    country TEXT PRIMARY KEY,
+                    territories_month INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_diplomacy_stats (
+                    country TEXT PRIMARY KEY,
+                    alliances INTEGER NOT NULL DEFAULT 0,
+                    treaties INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_stability_stats (
+                    country TEXT PRIMARY KEY,
+                    stability_index INTEGER NOT NULL DEFAULT 50,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_news_quality (
+                    country TEXT PRIMARY KEY,
+                    autopassed INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS monthly_awards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    month_key TEXT NOT NULL,
+                    award_name TEXT NOT NULL,
+                    country TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             try:
                 await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
             except aiosqlite.OperationalError:
@@ -103,11 +158,11 @@ class Database:
             row = await cursor.fetchone()
         return row is not None
 
-    async def mark_processed(self, source_chat: str, message_id: int, content_hash: str) -> None:
+    async def mark_processed(self, source_chat: str, source_country: str, message_id: int, content_hash: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                "INSERT OR IGNORE INTO processed_posts (source_chat, message_id, content_hash) VALUES (?, ?, ?)",
-                (source_chat, message_id, content_hash),
+                "INSERT OR IGNORE INTO processed_posts (source_chat, source_country, message_id, content_hash) VALUES (?, ?, ?, ?)",
+                (source_chat, source_country, message_id, content_hash),
             )
             await db.commit()
 
@@ -333,3 +388,86 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             row = await (await db.execute("SELECT citizens FROM country_stats WHERE country = ?", (country,))).fetchone()
         return int(row[0]) if row else 100
+
+    async def seed_country_extra_metrics(self, mapping: dict[str, dict[str, int]]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, payload in mapping.items():
+                terr = int(payload.get("territories_month", 0))
+                alliances = int(payload.get("alliances", 0))
+                treaties = int(payload.get("treaties", 0))
+                stability = int(payload.get("stability_index", 50))
+                quality = max(0, min(100, int(payload.get("quality_percent", 70))))
+                cursor = await db.execute(
+                    "INSERT OR IGNORE INTO country_territory_progress (country, territories_month) VALUES (?, ?)",
+                    (country, terr),
+                )
+                inserted += cursor.rowcount or 0
+                await db.execute(
+                    "INSERT OR IGNORE INTO country_diplomacy_stats (country, alliances, treaties) VALUES (?, ?, ?)",
+                    (country, alliances, treaties),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO country_stability_stats (country, stability_index) VALUES (?, ?)",
+                    (country, stability),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO country_news_quality (country, autopassed, total) VALUES (?, ?, ?)",
+                    (country, quality, 100),
+                )
+            await db.commit()
+        return inserted
+
+    async def increment_news_quality(self, country: str, autopassed_delta: int, total_delta: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_news_quality (country, autopassed, total) VALUES (?, 0, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE country_news_quality SET autopassed = MAX(0, autopassed + ?), total = MAX(0, total + ?), updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (autopassed_delta, total_delta, country),
+            )
+            await db.commit()
+
+    async def list_country_extra_metrics(self) -> dict[str, dict[str, int]]:
+        result: dict[str, dict[str, int]] = {}
+        async with aiosqlite.connect(self.path) as db:
+            terr_rows = await (await db.execute("SELECT country, territories_month FROM country_territory_progress")).fetchall()
+            dip_rows = await (await db.execute("SELECT country, alliances, treaties FROM country_diplomacy_stats")).fetchall()
+            stab_rows = await (await db.execute("SELECT country, stability_index FROM country_stability_stats")).fetchall()
+            q_rows = await (await db.execute("SELECT country, autopassed, total FROM country_news_quality")).fetchall()
+        for c, v in terr_rows:
+            result.setdefault(str(c), {})["territories_month"] = int(v)
+        for c, a, t in dip_rows:
+            data = result.setdefault(str(c), {})
+            data["alliances"] = int(a)
+            data["treaties"] = int(t)
+        for c, s in stab_rows:
+            result.setdefault(str(c), {})["stability_index"] = int(s)
+        for c, a, t in q_rows:
+            data = result.setdefault(str(c), {})
+            data["quality_percent"] = int((int(a) / int(t)) * 100) if int(t) > 0 else 0
+        return result
+
+    async def monthly_country_post_counts(self, month_key: str) -> list[tuple[str, int]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                """
+                SELECT source_country, COUNT(*) as cnt
+                FROM processed_posts
+                WHERE strftime('%Y-%m', created_at) = ?
+                GROUP BY source_country
+                ORDER BY cnt DESC
+                """,
+                (month_key,),
+            )).fetchall()
+        return [(str(r[0]), int(r[1])) for r in rows]
+
+    async def add_monthly_award(self, month_key: str, award_name: str, country: str, value: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO monthly_awards (month_key, award_name, country, value) VALUES (?, ?, ?, ?)",
+                (month_key, award_name, country, value),
+            )
+            await db.commit()

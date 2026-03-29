@@ -252,6 +252,20 @@ class Config:
         }
     )
 
+    initial_country_extra_metrics: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {
+            "Обоссляндия": {"territories_month": 12, "alliances": 3, "treaties": 2, "stability_index": 92, "quality_percent": 94},
+            "Триединая Русь": {"territories_month": 8, "alliances": 4, "treaties": 2, "stability_index": 78, "quality_percent": 85},
+            "Ось-Возмездия": {"territories_month": 2, "alliances": 5, "treaties": 1, "stability_index": 55, "quality_percent": 60},
+            "ТНР": {"territories_month": 3, "alliances": 2, "treaties": 1, "stability_index": 75, "quality_percent": 89},
+            "Вилония": {"territories_month": 6, "alliances": 3, "treaties": 1, "stability_index": 48, "quality_percent": 65},
+            "Северландия": {"territories_month": 5, "alliances": 2, "treaties": 1, "stability_index": 70, "quality_percent": 82},
+            "Зитор": {"territories_month": 4, "alliances": 1, "treaties": 1, "stability_index": 68, "quality_percent": 80},
+            "Аль-Нуурия": {"territories_month": 2, "alliances": 1, "treaties": 0, "stability_index": 65, "quality_percent": 78},
+            "Белоярск": {"territories_month": 1, "alliances": 0, "treaties": 0, "stability_index": 60, "quality_percent": 75},
+        }
+    )
+
 
 _load_dotenv_if_present()
 

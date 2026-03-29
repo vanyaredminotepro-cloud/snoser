@@ -25,6 +25,8 @@ async def main() -> None:
     logger.info("Country leaders seeded from config: %s", seeded)
     stats_seeded = await db.seed_country_stats(config.initial_country_stats)
     logger.info("Country stats seeded from config: %s", stats_seeded)
+    extras_seeded = await db.seed_country_extra_metrics(config.initial_country_extra_metrics)
+    logger.info("Country extra metrics seeded from config: %s", extras_seeded)
 
     try:
         runtime = AppRuntime()

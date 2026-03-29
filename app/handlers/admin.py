@@ -589,12 +589,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
             return
 
         if action == "reject":
-            await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await service.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
             await callback.message.answer("Отклонено")
             return
 
         if action == "war_block":
-            await service.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await service.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
             await callback.message.answer("Классифицировано как военные действия: отклонено")
             return
 

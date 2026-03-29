@@ -1,10 +1,12 @@
 import asyncio
+import calendar
 import json
 import logging
 import re
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import Bot
@@ -261,6 +263,7 @@ class NewsService:
         rows = await self.db.list_country_stats()
         if not rows:
             return "Статистика пока не заполнена."
+        extra = await self.db.list_country_extra_metrics()
 
         def medal(i: int) -> str:
             return "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i + 1}."
@@ -268,22 +271,107 @@ class NewsService:
         by_army = sorted(rows, key=lambda r: r[2], reverse=True)[:9]
         by_budget = sorted(rows, key=lambda r: r[1], reverse=True)[:9]
         by_citizens = sorted(rows, key=lambda r: r[3], reverse=True)[:9]
+        by_power = sorted(rows, key=lambda r: self._power_score(r[1], r[2], r[3], r[4]), reverse=True)[:9]
+        by_efficiency = sorted(rows, key=lambda r: (r[2] / max(r[3], 1)) * 1000, reverse=True)[:9]
+        by_econ_eff = sorted(rows, key=lambda r: r[1] / max(r[3], 1), reverse=True)[:9]
+
+        terr_rows = sorted(
+            [(country, extra.get(country, {}).get("territories_month", 0)) for country, *_ in rows],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:9]
+        dip_rows = sorted(
+            [(country, extra.get(country, {}).get("alliances", 0) + extra.get(country, {}).get("treaties", 0)) for country, *_ in rows],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:9]
+        stab_rows = sorted(
+            [(country, extra.get(country, {}).get("stability_index", 50)) for country, *_ in rows],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:9]
+        quality_rows = sorted(
+            [(country, extra.get(country, {}).get("quality_percent", 0)) for country, *_ in rows],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:9]
 
         army_lines = [f"{medal(i)} <b>{country}</b> — <i>{army} ч.</i>" for i, (country, _, army, _, _) in enumerate(by_army)]
         budget_lines = [f"{medal(i)} <b>{country}</b> — <i>{budget:,} вирт-руб.</i>" for i, (country, budget, _, _, _) in enumerate(by_budget)]
         citizen_lines = [f"{medal(i)} <b>{country}</b> — <i>{citizens} ч.</i>" for i, (country, _, _, citizens, _) in enumerate(by_citizens)]
+        power_lines = [f"{medal(i)} <b>{country}</b> — <i>{self._power_score(budget, army, citizens, life)}</i>" for i, (country, budget, army, citizens, life) in enumerate(by_power)]
+        military_eff_lines = [f"{medal(i)} <b>{country}</b> — <i>{((army / max(citizens,1))*1000):.1f} солд./1000</i>" for i, (country, _, army, citizens, _) in enumerate(by_efficiency)]
+        econ_eff_lines = [f"{medal(i)} <b>{country}</b> — <i>{(budget / max(citizens,1)):.1f} на гражданина</i>" for i, (country, budget, _, citizens, _) in enumerate(by_econ_eff)]
+        terr_lines = [f"{medal(i)} <b>{country}</b> — <i>{value}</i>" for i, (country, value) in enumerate(terr_rows)]
+        dip_lines = [f"{medal(i)} <b>{country}</b> — <i>{value}</i>" for i, (country, value) in enumerate(dip_rows)]
+        stab_lines = [f"{medal(i)} <b>{country}</b> — <i>{value}</i>" for i, (country, value) in enumerate(stab_rows)]
+        quality_lines = [f"{medal(i)} <b>{country}</b> — <i>{value}%</i>" for i, (country, value) in enumerate(quality_rows)]
 
         return (
             "<blockquote>"
-            "<b>📊 Статистика армий в РП</b>\n"
+            "<b>🏆 Индекс мощи</b>\n"
+            + "\n".join(power_lines)
+            + "\n\n<b>📊 Статистика армий в РП</b>\n"
             + "\n".join(army_lines)
             + "\n\n<b>🕯 Статистика бюджетов в РП</b>\n"
             + "\n".join(budget_lines)
             + "\n\n<b>📈 Статистика граждан в РП</b>\n"
             + "\n".join(citizen_lines)
+            + "\n\n<b>⚔️ Военная эффективность</b>\n"
+            + "\n".join(military_eff_lines)
+            + "\n\n<b>💰 Экономическая эффективность</b>\n"
+            + "\n".join(econ_eff_lines)
+            + "\n\n<b>🗺 Территориальный прогресс (месяц)</b>\n"
+            + "\n".join(terr_lines)
+            + "\n\n<b>🤝 Дипломатический рейтинг</b>\n"
+            + "\n".join(dip_lines)
+            + "\n\n<b>🛡 Индекс стабильности</b>\n"
+            + "\n".join(stab_lines)
+            + "\n\n<b>✅ РП-качество новостей</b>\n"
+            + "\n".join(quality_lines)
             + "\n\n#RP"
             "</blockquote>"
         )
+
+    async def publish_monthly_digest_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        if now.day != 1:
+            return
+        prev_month_last_day = now.replace(day=1) - timedelta(days=1)
+        month_key = prev_month_last_day.strftime("%Y-%m")
+        sent_key = f"monthly_digest_sent:{month_key}"
+        if await self.db.get_state(sent_key, "0") == "1":
+            return
+
+        rows = await self.db.monthly_country_post_counts(month_key)
+        if not rows:
+            await self.db.set_state(sent_key, "1")
+            return
+
+        month_name = calendar.month_name[int(month_key.split("-")[1])]
+        lines = [f"<b>🗓 Итоги {month_name} {month_key.split('-')[0]}: активность стран</b>"]
+        for idx, (country, cnt) in enumerate(rows[:15], start=1):
+            medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}."
+            lines.append(f"{medal} <b>{country}</b> — <i>{cnt} новостей</i>")
+
+        winner_country, winner_cnt = rows[0]
+        lines.append("\n<b>🏆 Награды месяца</b>")
+        lines.append(f"• <b>Страна месяца:</b> {winner_country}")
+        lines.append(f"• <b>Самая активная редакция:</b> {winner_cnt} новостей")
+        await self.db.add_monthly_award(month_key, "Страна месяца", winner_country, str(winner_cnt))
+        await self.db.add_monthly_award(month_key, "Самая активная редакция", winner_country, str(winner_cnt))
+
+        message = "<blockquote>" + "\n".join(lines) + "\n\n#RP #ИтогиМесяца</blockquote>"
+        try:
+            if self.user_client:
+                await self.user_client.send_message(config.target_channel, message, parse_mode="html")
+            else:
+                await self.bot.send_message(config.target_channel, message, parse_mode="HTML")
+            await self.db.set_state(sent_key, "1")
+        except Exception:
+            logger.exception("Failed to publish monthly digest")
+
+        return
 
     def _summarize_if_huge(self, post: IncomingPost, text: str) -> str:
         if len(text) <= 900:
@@ -359,6 +447,7 @@ class NewsService:
         while True:
             try:
                 due = await self.db.get_due_scheduled_posts(int(time.time()))
+                await self.publish_monthly_digest_if_due()
                 for post_id, source_country, text in due:
                     fake_id = int(time.time()) + post_id
                     await self.enqueue(
@@ -484,21 +573,29 @@ class NewsService:
         if config.publish_delay_seconds > 0:
             await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
 
-        await self.publish_and_mark(post, formatted, entities, hash_value)
+        await self.publish_and_mark(post, formatted, entities, hash_value, auto_passed=True)
 
-    async def publish_and_mark(self, post: IncomingPost, formatted: str, entities: list | None, hash_value: str) -> None:
+    async def publish_and_mark(
+        self,
+        post: IncomingPost,
+        formatted: str,
+        entities: list | None,
+        hash_value: str,
+        auto_passed: bool = False,
+    ) -> None:
         try:
             if self.user_client:
                 await self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
             else:
                 await self.bot.send_message(chat_id=config.target_channel, text=formatted)
-            await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
         except (TelegramBadRequest, RPCError):
             logger.exception("Publish failed")
 
-    async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str) -> None:
+    async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str, auto_passed: bool = False) -> None:
         try:
             if self.user_client and post.media_file_id:
                 await self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
@@ -509,10 +606,11 @@ class NewsService:
             elif post.media_type == "animation" and post.media_file_id:
                 await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
             else:
-                await self.publish_and_mark(post, caption, None, hash_value)
+                await self.publish_and_mark(post, caption, None, hash_value, auto_passed=auto_passed)
                 return
 
-            await self.db.mark_processed(post.source_channel, post.message_id, hash_value)
+            await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
             logger.info("Published media %s/%s", post.source_channel, post.message_id)
         except (TelegramBadRequest, RPCError):
