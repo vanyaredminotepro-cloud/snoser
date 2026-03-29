@@ -39,15 +39,20 @@ class RPFilter:
         "политик", "эконом", "промышлен", "госпрограмм", "встреч", "переговор", "саммит", "корол", "визит", "делегац",
         "правител", "назнач", "избран", "официал", "лидер", "глав", "администрац",
         "мобилизац", "оборон", "училищ", "готовност", "патрул", "спецназ",
+        "ракет", "автомат", "винтовк", "пистолет", "гранат", "нож", "автомобил", "мотоцикл", "грузовик", "автобус", "колонн",
     }
 
     action_roots = {
-        "начал", "начина", "провод", "запуска", "сообщ", "объяв", "ввод", "созда", "откры", "усили", "расшир",
+        "начал", "начина", "провод", "запуска", "сообщ", "объяв", "ввод", "созда", "откры", "усили", "расшир", "купил", "выехал", "готов",
     }
 
     real_world_roots = {"росси", "украин", "нато", "сша", "евросоюз", "пути", "байден", "ww2"}
+    forbidden_heavy_equipment_roots = {
+        "танк", "бтр", "бронетранспортер", "бронемаш", "самолет", "вертолет", "истреб", "бомбардиров",
+        "линкор", "авианос", "крейсер", "эсмин", "подводн", "подлод",
+    }
     forbidden_weapon_roots = {
-        "ядер", "атомн", "химическ", "газов", "лазер", "робот", "излучен", "гранатомет", "бомб",
+        "ядер", "атомн", "химическ", "биолог", "газов", "лазер", "робот", "излучен", "плазм", "антиграв", "космическ", "силов",
     }
     forbidden_structure_roots = {
         "докс", "доксинг", "угроз", "свой чат", "своя валюта", "своя карта", "мультиаккаунт", "фальсификац",
@@ -111,14 +116,18 @@ class RPFilter:
     ) -> FilterResult:
         low = text.lower()
         words = self._words(low)
+        rules_discussion = any(k in low for k in ["почему запрещ", "почему запрет", "обсужд", "правил", "разрешен", "запрещен"])
 
         if self._contains_banned_alliance_name(low):
             return FilterResult(False, "BANNED_ALLIANCE_NAME", "обнаружено запрещённое/маскируемое название")
 
-        if any(phrase in low for phrase in self.ooc_phrases) or self._contains_root(words, self.ooc_roots):
+        if (any(phrase in low for phrase in self.ooc_phrases) or self._contains_root(words, self.ooc_roots)) and not rules_discussion:
             return FilterResult(False, "OOC_META_CONTENT", "обнаружены OOC/meta маркеры")
 
-        if self._contains_root(words, self.forbidden_weapon_roots):
+        if not rules_discussion and self._contains_root(words, self.forbidden_heavy_equipment_roots):
+            return FilterResult(False, "FORBIDDEN_HEAVY_EQUIPMENT", "обнаружены запрещённые тяжёлые системы (танки/авиация/корабли)")
+
+        if not rules_discussion and self._contains_root(words, self.forbidden_weapon_roots):
             return FilterResult(False, "FORBIDDEN_WEAPON_TYPE", "обнаружено запрещённое оружие/технология")
 
         if any(token in low for token in self.forbidden_structure_roots):
@@ -139,7 +148,13 @@ class RPFilter:
             if unknown_tags:
                 return FilterResult(False, "UNKNOWN_COUNTRY_HASHTAG", f"неизвестные хештеги: {', '.join(sorted(unknown_tags)[:3])}")
 
+        if rules_discussion:
+            return FilterResult(True, "ALLOWED_RULES_DISCUSSION")
+
         if len(words) < 3:
+            short_allow_roots = {"ракет", "автомат", "винтовк", "пистолет", "гранат", "нож", "автомобил", "мотоцикл", "грузовик", "автобус", "колонн"}
+            if self._contains_root(words, short_allow_roots):
+                return FilterResult(True, "ALLOWED")
             return FilterResult(False, "TOO_SHORT_OR_NO_RP_EVENT", "слишком короткий текст без RP-контекста")
 
         if self._contains_root(words, self.military_roots):
