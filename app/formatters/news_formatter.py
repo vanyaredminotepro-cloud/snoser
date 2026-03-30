@@ -354,11 +354,32 @@ class NewsFormatter:
         return text, list(dict.fromkeys(tags))
 
     def rewrite(self, country: str, text: str) -> str:
-        if text.strip().lower().startswith("мы "):
-            return text
-        if text.lower().startswith(country.lower()):
-            return text
-        return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", text, flags=re.IGNORECASE)
+        out = text
+        country_prep = self._country_prepositional(country)
+        out = re.sub(r"(?i)\bв\s+нашей\s+стране\b", f"в {country_prep}", out)
+        out = re.sub(r"(?i)\bв\s+нашем\s+государстве\b", f"в {country_prep}", out)
+        out = re.sub(r"(?i)\bв\s+нашей\s+республике\b", f"в {country_prep}", out)
+        out = re.sub(r"(?i)\bнаша\s+страна\b", country, out)
+        out = re.sub(r"(?i)\bнаше\s+государство\b", country, out)
+
+        if out.strip().lower().startswith("мы "):
+            return out
+        if out.lower().startswith(country.lower()):
+            return out
+        return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", out, flags=re.IGNORECASE)
+
+    @staticmethod
+    def _country_prepositional(country: str) -> str:
+        low = country.lower()
+        if low.endswith("ия"):
+            return f"{country[:-2]}ии"
+        if low.endswith("а"):
+            return f"{country[:-1]}е"
+        if low.endswith("я"):
+            return f"{country[:-1]}е"
+        if low.endswith("ь"):
+            return f"{country[:-1]}и"
+        return country
 
     @staticmethod
     def _normalize(s: str) -> str:

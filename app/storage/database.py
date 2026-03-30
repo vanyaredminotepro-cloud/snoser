@@ -223,6 +223,16 @@ class Database:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS pending_posts (
+                    queue_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS user_bans (
                     user_id INTEGER PRIMARY KEY,
                     banned_at INTEGER NOT NULL,
@@ -236,6 +246,29 @@ class Database:
             except aiosqlite.OperationalError:
                 pass
             await db.commit()
+
+    async def save_pending_post(self, queue_key: str, payload_json: str, now_ts: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO pending_posts (queue_key, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(queue_key) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+                (queue_key, payload_json, now_ts, now_ts),
+            )
+            await db.commit()
+
+    async def delete_pending_post(self, queue_key: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM pending_posts WHERE queue_key = ?", (queue_key,))
+            await db.commit()
+
+    async def list_pending_posts(self, limit: int = 500) -> list[tuple[str, str]]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT queue_key, payload_json FROM pending_posts ORDER BY created_at ASC LIMIT ?",
+                (int(limit),),
+            )
+            rows = await cursor.fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
 
     async def is_duplicate(self, content_hash: str) -> bool:
         async with aiosqlite.connect(self.path) as db:
