@@ -52,22 +52,37 @@ def _optional_env_int(*names: str) -> Optional[int]:
         raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
+def _optional_env_bool(*names: str, default: bool = False) -> bool:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    names_str = ", ".join(names)
+    raise RuntimeError(f"Environment variable {names_str} must be a boolean (true/false, 1/0)")
+
+
 @dataclass(slots=True)
 class Config:
     api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
     api_hash: Optional[str] = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
     bot_token: Optional[str] = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
-    admin_id: int = 5006629901
-    admin_username: str = "@supermegaluti"
+    admin_id: int = field(default_factory=lambda: _optional_env_int("ADMIN_ID") or 5006629901)
+    admin_username: str = field(default_factory=lambda: _first_present_env("ADMIN_USERNAME") or "@supermegaluti")
 
-    target_channel: str = "@novostnikobosslandia"
-    publish_delay_seconds: float = 0.0
+    target_channel: str = field(default_factory=lambda: _first_present_env("TARGET_CHANNEL") or "@novostnikobosslandia")
+    publish_delay_seconds: float = field(default_factory=lambda: float(_first_present_env("PUBLISH_DELAY_SECONDS") or "0.0"))
 
-    session_name: str = "news_userbot"
-    sqlite_path: Path = Path("app/storage/bot_data.sqlite3")
-    logs_dir: Path = Path("logs")
+    session_name: str = field(default_factory=lambda: _first_present_env("SESSION_NAME") or "news_userbot")
+    sqlite_path: Path = field(default_factory=lambda: Path(_first_present_env("SQLITE_PATH") or "app/storage/bot_data.sqlite3"))
+    logs_dir: Path = field(default_factory=lambda: Path(_first_present_env("LOGS_DIR") or "logs"))
     emoji_storage_path: Path = Path("app/storage/emojis.json")
+    port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
+    healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5

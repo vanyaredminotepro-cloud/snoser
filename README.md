@@ -103,6 +103,20 @@ TG_API_HASH=0123456789abcdef0123456789abcdef
 TG_BOT_TOKEN=123456:ABCDEF...
 ```
 
+Дополнительно (для прод/railway) можно задать:
+
+```env
+ADMIN_ID=5006629901
+ADMIN_USERNAME=@your_admin_username
+TARGET_CHANNEL=@your_target_channel
+SESSION_NAME=news_userbot
+SQLITE_PATH=app/storage/bot_data.sqlite3
+LOGS_DIR=logs
+PUBLISH_DELAY_SECONDS=0
+PORT=8080
+HEALTHCHECK_ENABLED=true
+```
+
 Изменяемые параметры:
 - источники
 - хештеги стран
@@ -138,6 +152,9 @@ python app/main.py
 4. Проверить логи деплоя.
 5. Убедиться, что бот онлайн и видит источники.
 
+Подробный гайд: `RAILWAY_DEPLOY_GUIDE.md`  
+Частые проблемы и фиксы: `RAILWAY_TROUBLESHOOTING.md`
+
 ## Админ-гайд
 
 - `/start` — открывает меню кнопок.
@@ -171,6 +188,7 @@ python app/main.py
 - SQLite для устойчивости к рестартам.
 - Авто-restart на Railway (`ON_FAILURE`).
 - uvloop для ускорения event loop.
+- Встроенный health endpoint (`200 OK`) на `PORT` для Railway health checks.
 
 ## Важные примечания
 
