@@ -126,3 +126,5 @@ def test_emoji_to_key_covers_expanded_variants() -> None:
     assert NewsFormatter.emoji_to_key.get("🛰️") in {"MAP", "WARNING", "DEFAULT"}
     assert NewsFormatter.emoji_to_key.get("💸") == "ECONOMY"
     assert NewsFormatter.emoji_to_key.get("🗳️") == "DIPLOMACY"
+    assert NewsFormatter.emoji_to_key.get("⚡") == "WARNING"
+    assert NewsFormatter.emoji_to_key.get("⚡️") == "WARNING"
