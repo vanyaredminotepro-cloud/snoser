@@ -57,3 +57,13 @@ def test_config_bool_parser_rejects_invalid(monkeypatch):
         assert "HEALTHCHECK_ENABLED" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError for invalid boolean")
+
+
+def test_config_rejects_invalid_long_pause_chance(monkeypatch):
+    monkeypatch.setenv("LONG_PAUSE_CHANCE", "1.5")
+    try:
+        Config()
+    except RuntimeError as exc:
+        assert "LONG_PAUSE_CHANCE" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for invalid long pause chance")

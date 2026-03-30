@@ -303,6 +303,18 @@ class Config:
         }
     )
 
+    def __post_init__(self) -> None:
+        if self.queue_ingest_delay_min < 0 or self.queue_ingest_delay_max < 0:
+            raise RuntimeError("QUEUE_INGEST_DELAY_* must be >= 0")
+        if self.queue_publish_delay_min < 0 or self.queue_publish_delay_max < 0:
+            raise RuntimeError("QUEUE_PUBLISH_DELAY_* must be >= 0")
+        if self.long_pause_min < 0 or self.long_pause_max < 0:
+            raise RuntimeError("LONG_PAUSE_* must be >= 0")
+        if not (0.0 <= self.long_pause_chance <= 1.0):
+            raise RuntimeError("LONG_PAUSE_CHANCE must be between 0 and 1")
+        if self.daily_post_limit <= 0:
+            raise RuntimeError("DAILY_POST_LIMIT must be > 0")
+
 
 _load_dotenv_if_present()
 

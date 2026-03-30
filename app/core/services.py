@@ -96,6 +96,11 @@ class NewsService:
             logger.info("Recovered %s pending posts from DB", recovered)
         return recovered
 
+    async def _metric_inc(self, key: str, step: int = 1) -> None:
+        metric_key = f"metric:{key}"
+        cur = int(await self.db.get_state(metric_key, "0") or "0")
+        await self.db.set_state(metric_key, str(cur + step))
+
     @staticmethod
     def _known_country_terms() -> set[str]:
         terms: set[str] = set()
@@ -469,9 +474,17 @@ class NewsService:
         if key in self._queued_keys:
             return
         await self.db.save_pending_post(key, json.dumps(asdict(post), ensure_ascii=False), int(time.time()))
+        if self.queue.full():
+            logger.warning("Queue is full, keep post in pending storage: %s", key)
+            await self._metric_inc("queue_overflow")
+            return
         ingest_min = min(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
         ingest_max = max(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
         await asyncio.sleep(random.uniform(ingest_min, ingest_max))
+        if self.queue.full():
+            logger.warning("Queue became full after ingest delay, keep post in pending storage: %s", key)
+            await self._metric_inc("queue_overflow")
+            return
         await self.queue.put(post)
         self._queued_keys.add(key)
 
@@ -516,10 +529,12 @@ class NewsService:
             except TelegramRetryAfter as exc:
                 wait_s = max(1, int(getattr(exc, "retry_after", 3)))
                 logger.warning("TelegramRetryAfter: wait %ss", wait_s)
+                await self._metric_inc("retry_after")
                 await asyncio.sleep(wait_s)
             except FloodWaitError as exc:
                 wait_s = max(1, int(getattr(exc, "seconds", 3)))
                 logger.warning("FloodWaitError: wait %ss", wait_s)
+                await self._metric_inc("flood_wait")
                 await asyncio.sleep(wait_s)
             except (TelegramBadRequest, RPCError):
                 if retries_left <= 0:
@@ -527,6 +542,7 @@ class NewsService:
                 retries_left -= 1
                 backoff = random.uniform(4.0, 10.0)
                 logger.exception("Telegram publish error, retry in %.1fs (left=%s)", backoff, retries_left)
+                await self._metric_inc("publish_retry")
                 await asyncio.sleep(backoff)
 
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
@@ -718,6 +734,7 @@ class NewsService:
             return False
         if await self._is_daily_limit_reached():
             logger.info("Daily limit reached (%s), ignore %s/%s", config.daily_post_limit, post.source_channel, post.message_id)
+            await self._metric_inc("daily_limit_hit")
             return True
 
         source_text = (post.text or "").strip()
@@ -854,10 +871,12 @@ class NewsService:
             await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
+            await self._metric_inc("publish_ok")
             logger.info("Published %s/%s", post.source_channel, post.message_id)
             return True
         except (TelegramBadRequest, RPCError):
             logger.exception("Publish failed")
+            await self._metric_inc("publish_failed")
             return False
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str, auto_passed: bool = False) -> None:
