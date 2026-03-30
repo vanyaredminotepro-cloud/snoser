@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from telethon import TelegramClient
-from telethon.errors import RPCError
+from telethon.errors import FloodWaitError, RPCError
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -441,7 +441,64 @@ class NewsService:
         await self.db.set_state("paused", "1" if paused else "0")
 
     async def enqueue(self, post: IncomingPost) -> None:
+        ingest_min = min(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
+        ingest_max = max(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
+        await asyncio.sleep(random.uniform(ingest_min, ingest_max))
         await self.queue.put(post)
+
+    @staticmethod
+    def _daily_limit_key() -> str:
+        return f"publish_count:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+
+    async def _is_daily_limit_reached(self) -> bool:
+        current = int(await self.db.get_state(self._daily_limit_key(), "0") or "0")
+        return current >= max(1, config.daily_post_limit)
+
+    async def _increment_daily_count(self) -> None:
+        key = self._daily_limit_key()
+        current = int(await self.db.get_state(key, "0") or "0")
+        await self.db.set_state(key, str(current + 1))
+
+    async def _wait_human_publish_delay(self) -> None:
+        delay_min = min(config.queue_publish_delay_min, config.queue_publish_delay_max)
+        delay_max = max(config.queue_publish_delay_min, config.queue_publish_delay_max)
+        await asyncio.sleep(random.uniform(delay_min, delay_max))
+        if random.random() < max(0.0, min(1.0, config.long_pause_chance)):
+            lp_min = min(config.long_pause_min, config.long_pause_max)
+            lp_max = max(config.long_pause_min, config.long_pause_max)
+            await asyncio.sleep(random.uniform(lp_min, lp_max))
+
+    @staticmethod
+    def _humanize_text_variation(text: str) -> str:
+        out = text
+        if random.random() < 0.20 and ". " in out and "\n\n" not in out:
+            first, rest = out.split(". ", 1)
+            out = f"{first}.\n\n{rest}"
+        if random.random() < 0.15 and "\n\n#" in out:
+            out = out.replace("\n\n#", "\n#", 1)
+        return out
+
+    async def _send_with_retry(self, sender) -> None:
+        retries_left = 5
+        while True:
+            try:
+                await sender()
+                return
+            except TelegramRetryAfter as exc:
+                wait_s = max(1, int(getattr(exc, "retry_after", 3)))
+                logger.warning("TelegramRetryAfter: wait %ss", wait_s)
+                await asyncio.sleep(wait_s)
+            except FloodWaitError as exc:
+                wait_s = max(1, int(getattr(exc, "seconds", 3)))
+                logger.warning("FloodWaitError: wait %ss", wait_s)
+                await asyncio.sleep(wait_s)
+            except (TelegramBadRequest, RPCError):
+                if retries_left <= 0:
+                    raise
+                retries_left -= 1
+                backoff = random.uniform(4.0, 10.0)
+                logger.exception("Telegram publish error, retry in %.1fs (left=%s)", backoff, retries_left)
+                await asyncio.sleep(backoff)
 
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
         now = int(time.time())
@@ -626,6 +683,9 @@ class NewsService:
         if await self.is_paused():
             logger.info("Paused; skip post %s/%s", post.source_channel, post.message_id)
             return
+        if await self._is_daily_limit_reached():
+            logger.info("Daily limit reached (%s), ignore %s/%s", config.daily_post_limit, post.source_channel, post.message_id)
+            return
 
         source_text = (post.text or "").strip()
         if not source_text and not post.has_media:
@@ -641,6 +701,7 @@ class NewsService:
         corrected = autocorrect_news_text(strip_emojis(translated or source_text))
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
+        corrected = self._humanize_text_variation(corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
@@ -705,9 +766,6 @@ class NewsService:
             )
             return
 
-        if config.publish_delay_seconds > 0:
-            await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
-
         await self.publish_and_mark(post, formatted, entities, hash_value, auto_passed=True)
 
     async def publish_and_mark(
@@ -719,11 +777,19 @@ class NewsService:
         auto_passed: bool = False,
     ) -> None:
         try:
+            await self._wait_human_publish_delay()
+            if config.publish_delay_seconds > 0:
+                await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
             if self.user_client:
-                await self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+                await self._send_with_retry(
+                    lambda: self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+                )
             else:
-                await self.bot.send_message(chat_id=config.target_channel, text=formatted)
+                await self._send_with_retry(
+                    lambda: self.bot.send_message(chat_id=config.target_channel, text=formatted)
+                )
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
             logger.info("Published %s/%s", post.source_channel, post.message_id)
@@ -732,19 +798,29 @@ class NewsService:
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str, auto_passed: bool = False) -> None:
         try:
+            await self._wait_human_publish_delay()
             if self.user_client and post.media_file_id:
-                await self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "photo" and post.media_file_id:
-                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "video" and post.media_file_id:
-                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "animation" and post.media_file_id:
-                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             else:
                 await self.publish_and_mark(post, caption, None, hash_value, auto_passed=auto_passed)
                 return
 
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
             logger.info("Published media %s/%s", post.source_channel, post.message_id)

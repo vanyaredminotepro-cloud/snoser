@@ -52,22 +52,56 @@ def _optional_env_int(*names: str) -> Optional[int]:
         raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
+def _optional_env_bool(*names: str, default: bool = False) -> bool:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    names_str = ", ".join(names)
+    raise RuntimeError(f"Environment variable {names_str} must be a boolean (true/false, 1/0)")
+
+
+def _optional_env_float(*names: str) -> Optional[float]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must be a float") from exc
+
+
 @dataclass(slots=True)
 class Config:
     api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
     api_hash: Optional[str] = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
     bot_token: Optional[str] = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
-    admin_id: int = 5006629901
-    admin_username: str = "@supermegaluti"
+    admin_id: int = field(default_factory=lambda: _optional_env_int("ADMIN_ID") or 5006629901)
+    admin_username: str = field(default_factory=lambda: _first_present_env("ADMIN_USERNAME") or "@supermegaluti")
 
-    target_channel: str = "@novostnikobosslandia"
-    publish_delay_seconds: float = 0.0
+    target_channel: str = field(default_factory=lambda: _first_present_env("TARGET_CHANNEL") or "@novostnikobosslandia")
+    publish_delay_seconds: float = field(default_factory=lambda: float(_first_present_env("PUBLISH_DELAY_SECONDS") or "0.0"))
+    queue_ingest_delay_min: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MIN") or 2.0)
+    queue_ingest_delay_max: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MAX") or 5.0)
+    queue_publish_delay_min: float = field(default_factory=lambda: _optional_env_float("QUEUE_PUBLISH_DELAY_MIN") or 3.0)
+    queue_publish_delay_max: float = field(default_factory=lambda: _optional_env_float("QUEUE_PUBLISH_DELAY_MAX") or 9.0)
+    long_pause_chance: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_CHANCE") or 0.20)
+    long_pause_min: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_MIN") or 15.0)
+    long_pause_max: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_MAX") or 20.0)
+    daily_post_limit: int = field(default_factory=lambda: _optional_env_int("DAILY_POST_LIMIT") or 30)
 
-    session_name: str = "news_userbot"
-    sqlite_path: Path = Path("app/storage/bot_data.sqlite3")
-    logs_dir: Path = Path("logs")
+    session_name: str = field(default_factory=lambda: _first_present_env("SESSION_NAME") or "news_userbot")
+    sqlite_path: Path = field(default_factory=lambda: Path(_first_present_env("SQLITE_PATH") or "app/storage/bot_data.sqlite3"))
+    logs_dir: Path = field(default_factory=lambda: Path(_first_present_env("LOGS_DIR") or "logs"))
     emoji_storage_path: Path = Path("app/storage/emojis.json")
+    port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
+    healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
