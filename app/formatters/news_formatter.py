@@ -63,6 +63,10 @@ class NewsFormatter:
         "🌐": "MAP",
         "❗️": "IMPORTANT",
     }
+    for _label, _emojis in emoji_variants.items():
+        _semantic_key = "DEFAULT" if _label == "default" else _label.upper()
+        for _emoji in _emojis:
+            emoji_to_key.setdefault(_emoji, _semantic_key)
 
 
     emoji_rules = {
