@@ -43,6 +43,7 @@ class AppRuntime:
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
+        await service.recover_pending_posts()
         worker_task = asyncio.create_task(service.worker())
         scheduler_task = asyncio.create_task(service.scheduler_worker())
         rss_task = asyncio.create_task(service.rss_worker())
