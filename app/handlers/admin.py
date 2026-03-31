@@ -196,6 +196,7 @@ def _main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📝 Анкета / создать страну", callback_data="menu:anketa")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats")],
         [InlineKeyboardButton(text="📊 Статистика стран (скоро)", callback_data="menu:country_stats")],
+        [InlineKeyboardButton(text="⚔️ Мобилизация", callback_data="menu:mobilization")],
         [InlineKeyboardButton(text="🧾 Оспорить отклонение", callback_data="menu:appeal")],
     ]
     if is_admin:
@@ -266,6 +267,25 @@ def bind_admin_handlers(service: NewsService) -> Router:
         )
         await message.answer(text, reply_markup=_main_menu_keyboard(is_admin))
 
+    @router.message(F.text.startswith("/mobilize"))
+    async def mobilize_cmd(message: Message) -> None:
+        if not await _guard_message(message):
+            return
+        if not message.from_user:
+            return
+        user_id = message.from_user.id
+        countries = _user_allowed_countries(user_id)
+        if not countries and user_id != config.admin_id:
+            await message.answer("У вас нет привязанной страны для мобилизации.")
+            return
+        country = countries[0] if countries else "Обоссляндия"
+        parts = (message.text or "").split()
+        requested_type = parts[1].strip().lower() if len(parts) > 1 else "conscription"
+        ok, report = await service.attempt_mobilization(country, requested_type)
+        await message.answer(report, parse_mode="HTML")
+        if ok:
+            await message.bot.send_message(config.admin_id, f"📌 Мобилизация\n{country}\n{report}")
+
     @router.callback_query(F.data.startswith("menu:"))
     async def menu_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _guard_callback(callback):
@@ -303,6 +323,15 @@ def bind_admin_handlers(service: NewsService) -> Router:
                 primary = user_countries[0] if user_countries else rows[0][0]
                 card = await service.render_country_stats_card(primary)
                 await callback.message.answer(card, parse_mode="HTML")
+            return
+        if action == "mobilization":
+            user_countries = _user_allowed_countries(callback.from_user.id)
+            if not user_countries and callback.from_user.id != config.admin_id:
+                await callback.message.answer("У вас нет страны для мобилизации.")
+                return
+            country = user_countries[0] if user_countries else "Обоссляндия"
+            text = await service.render_mobilization_status(country)
+            await callback.message.answer(text, parse_mode="HTML")
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)

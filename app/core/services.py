@@ -278,6 +278,140 @@ class NewsService:
             citizens_delta=citizens_delta,
         )
 
+    @staticmethod
+    def _week_key_utc() -> str:
+        return datetime.now(timezone.utc).strftime("%G-W%V")
+
+    async def calculate_mobilization_gain(self, country: str, requested_type: str) -> tuple[int, int, int]:
+        profile = config.mobilization_profiles[requested_type]
+        min_gain = int(profile["min_gain"])
+        max_gain = int(profile["max_gain"])
+        _, used, weekly_limit, last_week = await self.db.get_country_mobilization(country)
+        week_key = self._week_key_utc()
+
+        if last_week != week_key:
+            used = 0
+            weekly_limit = random.randint(min_gain, max_gain)
+        elif weekly_limit <= 0:
+            weekly_limit = random.randint(min_gain, max_gain)
+
+        remaining = max(0, weekly_limit - used)
+        if remaining <= 0:
+            return 0, used, weekly_limit
+
+        gain = min(remaining, random.randint(min_gain, max_gain))
+        return gain, used, weekly_limit
+
+    async def apply_mobilization_effects(self, country: str, mob_type: str, soldiers_gained: int) -> tuple[int, int, int, int]:
+        profile = config.mobilization_profiles[mob_type]
+        effects = profile["effects"]
+        await self.db.apply_country_stats_delta(country, army_delta=soldiers_gained)
+        budget_change, life_change, risk_change = await self.db.apply_country_multipliers(
+            country,
+            budget_pct=float(effects["budget_pct"]),
+            life_pct=float(effects["life_pct"]),
+            risk_delta=int(effects["risk_delta"]),
+        )
+        return soldiers_gained, budget_change, life_change, risk_change
+
+    async def attempt_mobilization(self, country: str, requested_type: str) -> tuple[bool, str]:
+        if requested_type not in config.mobilization_profiles:
+            return False, "Неизвестный тип мобилизации."
+
+        profile = config.mobilization_profiles[requested_type]
+        req = profile["requirements"]
+        factories = await self.db.get_military_factories(country)
+        war_status, _ = await self.db.get_country_war_and_risk(country)
+
+        min_factories = int(req["factories"])
+        allowed_statuses = [str(s) for s in req["war_status"]]
+        if factories < min_factories:
+            return False, f"Требуется военных заводов: {min_factories}, сейчас: {factories}."
+        if allowed_statuses and war_status not in allowed_statuses:
+            return False, f"Требуется один из статусов: {', '.join(allowed_statuses)}. Сейчас: {war_status}."
+
+        gained, used, weekly_limit = await self.calculate_mobilization_gain(country, requested_type)
+        week_key = self._week_key_utc()
+        if gained <= 0:
+            penalty = profile["penalty"]
+            penalty_msg = "Лимит недели исчерпан."
+            if penalty["mode"] == "warn":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                penalty_msg = f"Лимит недели исчерпан. Выдан варн #{warn_count}."
+            elif penalty["mode"] == "block":
+                block_until = int(time.time()) + int(penalty.get("days", 3)) * 86400
+                await self.db.set_state(f"mob_block:{country}", str(block_until))
+                penalty_msg = f"Лимит исчерпан. Мобилизация заблокирована на {penalty.get('days', 3)} дня."
+            elif penalty["mode"] == "budget_pct":
+                budget_change, _, _ = await self.db.apply_country_multipliers(country, budget_pct=float(penalty.get("value", -0.10)))
+                penalty_msg = f"Лимит исчерпан. Применён бюджетный штраф: {budget_change}."
+            elif penalty["mode"] == "warn_demob":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                stats = await self.db.get_country_stats(country)
+                army = stats[1] if stats else 0
+                demob = -int(army * float(penalty.get("demob_pct", 0.10)))
+                await self.db.apply_country_stats_delta(country, army_delta=demob)
+                penalty_msg = f"Лимит исчерпан. Варн #{warn_count}, демобилизация {abs(demob)}."
+            elif penalty["mode"] == "hard":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                stats = await self.db.get_country_stats(country)
+                army = stats[1] if stats else 0
+                demob = -int(army * 0.30)
+                budget_change, _, _ = await self.db.apply_country_multipliers(country, budget_pct=-0.50)
+                await self.db.apply_country_stats_delta(country, army_delta=demob)
+                penalty_msg = f"Лимит исчерпан. Варн #{warn_count}, бюджет {budget_change}, демобилизация {abs(demob)}."
+
+            await self.db.add_mobilization_log(country, requested_type, 0, 0, 0, 0, penalized=True)
+            return False, f"Ваша страна уже набрала максимум солдат на этой неделе. {penalty_msg}"
+
+        soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, requested_type, gained)
+        await self.db.update_country_mobilization(
+            country=country,
+            mobilization_type=requested_type,
+            mobilization_amount=used + gained,
+            weekly_limit=weekly_limit,
+            week_key=week_key,
+            ts=int(time.time()),
+        )
+        await self.db.add_mobilization_log(
+            country=country,
+            mobilization_type=requested_type,
+            soldiers_gained=soldiers,
+            budget_change=budget_change,
+            life_change=life_change,
+            risk_change=risk_change,
+            penalized=False,
+        )
+        msg = (
+            f"✅ Мобилизация: {profile['label']} ({requested_type})\n"
+            f"Набрано: +{soldiers} солдат\n"
+            f"Неделя: {used + gained}/{weekly_limit}\n"
+            f"Бюджет: {budget_change:+d}, жизнь: {life_change:+d}, риск: {risk_change:+d}"
+        )
+        return True, msg
+
+    async def render_mobilization_status(self, country: str) -> str:
+        mob_type, used, weekly_limit, week_key = await self.db.get_country_mobilization(country)
+        factories = await self.db.get_military_factories(country)
+        war_status, risk = await self.db.get_country_war_and_risk(country)
+        lines = [
+            f"<b>⚔️ Мобилизация: {country}</b>",
+            f"Тип: <b>{mob_type}</b>",
+            f"Лимит недели: <b>{used}/{weekly_limit if weekly_limit > 0 else 'не задан'}</b>",
+            f"Неделя: <i>{week_key or self._week_key_utc()}</i>",
+            f"Военные заводы: <b>{factories}</b>",
+            f"Статус войны: <b>{war_status}</b>, риск: <b>{risk}</b>",
+            "",
+            "<b>Доступные типы:</b>",
+        ]
+        for key, profile in config.mobilization_profiles.items():
+            req = profile["requirements"]
+            lines.append(
+                f"• <b>{profile['label']}</b> ({key}) — {profile['min_gain']}-{profile['max_gain']}/нед, "
+                f"заводы>={req['factories']}, статусы: {', '.join(req['war_status']) if req['war_status'] else 'любой'}"
+            )
+        return "\n".join(lines)
+
     async def render_country_stats_card(self, country: str) -> str:
         rows = await self.db.list_country_stats()
         if not rows:

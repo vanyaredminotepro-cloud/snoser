@@ -302,6 +302,58 @@ class Config:
             "Белоярск": {"territories_month": 1, "alliances": 0, "treaties": 0, "stability_index": 60, "quality_percent": 75},
         }
     )
+    mobilization_profiles: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {
+            "conscription": {
+                "label": "Призывы",
+                "min_gain": 2,
+                "max_gain": 5,
+                "requirements": {"factories": 0, "war_status": []},
+                "effects": {"budget_pct": 0.0, "life_pct": 0.0, "risk_delta": 0},
+                "penalty": {"mode": "warn"},
+            },
+            "voluntary": {
+                "label": "Добровольная",
+                "min_gain": 5,
+                "max_gain": 10,
+                "requirements": {"factories": 1, "war_status": []},
+                "effects": {"budget_pct": 0.0, "life_pct": 0.05, "risk_delta": 0},
+                "penalty": {"mode": "block", "days": 3},
+            },
+            "partial": {
+                "label": "Частичная",
+                "min_gain": 10,
+                "max_gain": 20,
+                "requirements": {"factories": 1, "war_status": ["threat", "martial_law", "war", "total_war"]},
+                "effects": {"budget_pct": -0.05, "life_pct": 0.0, "risk_delta": 0},
+                "penalty": {"mode": "budget_pct", "value": -0.10},
+            },
+            "normal": {
+                "label": "Обычная",
+                "min_gain": 15,
+                "max_gain": 30,
+                "requirements": {"factories": 1, "war_status": ["martial_law", "war", "total_war"]},
+                "effects": {"budget_pct": -0.10, "life_pct": -0.05, "risk_delta": 0},
+                "penalty": {"mode": "warn_demob", "demob_pct": 0.10},
+            },
+            "aggressive": {
+                "label": "Агрессивная",
+                "min_gain": 25,
+                "max_gain": 50,
+                "requirements": {"factories": 2, "war_status": ["war", "total_war"]},
+                "effects": {"budget_pct": -0.20, "life_pct": -0.10, "risk_delta": 5},
+                "penalty": {"mode": "warn_demob", "demob_pct": 0.20},
+            },
+            "total": {
+                "label": "Всеобщая",
+                "min_gain": 40,
+                "max_gain": 80,
+                "requirements": {"factories": 2, "war_status": ["total_war", "war"]},
+                "effects": {"budget_pct": -0.30, "life_pct": -0.20, "risk_delta": 15},
+                "penalty": {"mode": "hard"},
+            },
+        }
+    )
 
     def __post_init__(self) -> None:
         if self.queue_ingest_delay_min < 0 or self.queue_ingest_delay_max < 0:
