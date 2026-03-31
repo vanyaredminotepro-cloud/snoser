@@ -73,3 +73,14 @@ def test_mobilization_effects_change_stats(tmp_path: Path):
         assert risk >= 5
 
     asyncio.run(_run())
+
+
+def test_admin_is_not_blocked_by_antiflood(tmp_path: Path):
+    async def _run():
+        svc, _ = await _mk_service(tmp_path)
+        ok_msg, _ = await svc.check_antiflood(5006629901)
+        ok_cb, _ = await svc.check_user_access(5006629901, is_callback=True)
+        assert ok_msg is True
+        assert ok_cb is True
+
+    asyncio.run(_run())

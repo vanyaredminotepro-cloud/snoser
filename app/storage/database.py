@@ -341,6 +341,12 @@ class Database:
             row = await cursor.fetchone()
         return row[0] if row else default
 
+    async def list_state_prefix(self, prefix: str) -> list[tuple[str, str]]:
+        like = f"{prefix}%"
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute("SELECT key, value FROM app_state WHERE key LIKE ?", (like,))).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+
     async def store_moderation_payload(self, token: str, payload: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("INSERT OR REPLACE INTO moderation_queue (token, payload) VALUES (?, ?)", (token, payload))
@@ -631,6 +637,20 @@ class Database:
                 (country, mobilization_type, soldiers_gained, budget_change, life_change, risk_change, 1 if penalized else 0),
             )
             await db.commit()
+
+    async def aggregate_mobilization_logs(self, from_ts: int, to_ts: int) -> list[tuple[str, int, int, int, int]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT country, SUM(soldiers_gained), SUM(budget_change), SUM(life_change), SUM(risk_change) "
+                "FROM mobilization_logs "
+                "WHERE strftime('%s', created_at) >= ? AND strftime('%s', created_at) < ? "
+                "GROUP BY country ORDER BY country ASC",
+                (int(from_ts), int(to_ts)),
+            )).fetchall()
+        return [
+            (str(r[0]), int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0))
+            for r in rows
+        ]
 
     async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
         inserted = 0

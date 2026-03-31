@@ -394,10 +394,21 @@ class NewsService:
         mob_type, used, weekly_limit, week_key = await self.db.get_country_mobilization(country)
         factories = await self.db.get_military_factories(country)
         war_status, risk = await self.db.get_country_war_and_risk(country)
+        plan_raw = await self.db.get_state(f"mobplan:{country}", "")
+        active = False
+        target = 0
+        if plan_raw:
+            try:
+                plan = json.loads(plan_raw)
+                active = bool(plan.get("active"))
+                target = int(plan.get("target", 0))
+            except Exception:
+                pass
         lines = [
             f"<b>⚔️ Мобилизация: {country}</b>",
-            f"Тип: <b>{mob_type}</b>",
+            f"Тип: <b>{config.mobilization_profiles.get(mob_type, {}).get('label', mob_type)}</b>",
             f"Лимит недели: <b>{used}/{weekly_limit if weekly_limit > 0 else 'не задан'}</b>",
+            f"План недели: <b>{target if target > 0 else 'не выбран'}</b> ({'активен' if active else 'не активен'})",
             f"Неделя: <i>{week_key or self._week_key_utc()}</i>",
             f"Военные заводы: <b>{factories}</b>",
             f"Статус войны: <b>{war_status}</b>, риск: <b>{risk}</b>",
@@ -407,10 +418,126 @@ class NewsService:
         for key, profile in config.mobilization_profiles.items():
             req = profile["requirements"]
             lines.append(
-                f"• <b>{profile['label']}</b> ({key}) — {profile['min_gain']}-{profile['max_gain']}/нед, "
+                f"• <b>{profile['label']}</b> — {profile['min_gain']}-{profile['max_gain']}/нед, "
                 f"заводы>={req['factories']}, статусы: {', '.join(req['war_status']) if req['war_status'] else 'любой'}"
             )
         return "\n".join(lines)
+
+    async def start_mobilization(self, country: str, mob_type: str, requested_amount: int) -> tuple[bool, str]:
+        if mob_type not in config.mobilization_profiles:
+            return False, "Неизвестный тип мобилизации."
+        profile = config.mobilization_profiles[mob_type]
+        min_gain = int(profile["min_gain"])
+        max_gain = int(profile["max_gain"])
+        if requested_amount < min_gain or requested_amount > max_gain:
+            return False, f"Для этого типа доступно от {min_gain} до {max_gain} чел. в неделю."
+
+        req = profile["requirements"]
+        factories = await self.db.get_military_factories(country)
+        war_status, _ = await self.db.get_country_war_and_risk(country)
+        if factories < int(req["factories"]):
+            return False, f"Нужно военных заводов: {req['factories']}, сейчас: {factories}."
+        statuses = [str(s) for s in req["war_status"]]
+        if statuses and war_status not in statuses:
+            return False, f"Нужен статус: {', '.join(statuses)}. Сейчас: {war_status}."
+
+        week_key = self._week_key_utc()
+        plan_key = f"mobplan:{country}"
+        plan_raw = await self.db.get_state(plan_key, "")
+        if plan_raw:
+            try:
+                plan = json.loads(plan_raw)
+                if plan.get("active") and plan.get("week_key") == week_key:
+                    return False, "Мобилизация уже запущена на эту неделю. Дождитесь завершения."
+            except Exception:
+                pass
+
+        payload = {
+            "country": country,
+            "mob_type": mob_type,
+            "week_key": week_key,
+            "target": int(requested_amount),
+            "gained": 0,
+            "active": True,
+            "started_ts": int(time.time()),
+            "last_tick_ts": 0,
+        }
+        await self.db.set_state(plan_key, json.dumps(payload, ensure_ascii=False))
+        await self.db.update_country_mobilization(country, mob_type, 0, requested_amount, week_key, int(time.time()))
+        return True, f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед."
+
+    async def process_mobilization_plans(self) -> None:
+        now_ts = int(time.time())
+        week_key = self._week_key_utc()
+        for key, raw in await self.db.list_state_prefix("mobplan:"):
+            try:
+                plan = json.loads(raw)
+            except Exception:
+                continue
+            if not plan.get("active"):
+                continue
+            if plan.get("week_key") != week_key:
+                plan["active"] = False
+                await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+                continue
+            if now_ts - int(plan.get("last_tick_ts", 0)) < 6 * 3600:
+                continue
+
+            country = str(plan["country"])
+            mob_type = str(plan["mob_type"])
+            target = int(plan["target"])
+            gained = int(plan.get("gained", 0))
+            remaining = max(0, target - gained)
+            if remaining <= 0:
+                plan["active"] = False
+                await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+                continue
+            soldiers_chunk = max(1, min(remaining, max(1, target // 7)))
+            soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, mob_type, soldiers_chunk)
+            new_gained = gained + soldiers
+            plan["gained"] = new_gained
+            plan["last_tick_ts"] = now_ts
+            if new_gained >= target:
+                plan["active"] = False
+            await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+            await self.db.update_country_mobilization(country, mob_type, new_gained, target, week_key, now_ts)
+            await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
+
+    async def publish_weekly_mobilization_summary_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        if now.weekday() != 6:
+            return
+        week_key = now.strftime("%G-W%V")
+        state_key = f"mob_summary:{week_key}"
+        if await self.db.get_state(state_key, "0") == "1":
+            return
+
+        monday = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=6)
+        from_ts = int(monday.timestamp())
+        to_ts = int((monday + timedelta(days=7)).timestamp())
+        rows = await self.db.aggregate_mobilization_logs(from_ts, to_ts)
+        if not rows:
+            await self.db.set_state(state_key, "1")
+            return
+
+        def _fmt(v: int) -> str:
+            if v == 0:
+                return "не изменяется"
+            return f"+{v}" if v > 0 else str(v)
+
+        lines = ["<b>📊 Недельная мобилизационная сводка</b>"]
+        for country, soldiers, budget_ch, life_ch, risk_ch in rows:
+            lines.append(
+                f"\n<b>{country}</b>\n"
+                f"Солдаты: {_fmt(soldiers)} | Бюджет: {_fmt(budget_ch)} | "
+                f"Жизнь: {_fmt(life_ch)} | Риск: {_fmt(risk_ch)}"
+            )
+        summary = "\n".join(lines)
+        if self.user_client:
+            await self.user_client.send_message(config.target_channel, summary, parse_mode="html")
+        else:
+            await self.bot.send_message(config.target_channel, summary, parse_mode="HTML")
+        await self.db.set_state(state_key, "1")
 
     async def render_country_stats_card(self, country: str) -> str:
         rows = await self.db.list_country_stats()
@@ -680,6 +807,8 @@ class NewsService:
                 await asyncio.sleep(backoff)
 
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
+        if user_id == config.admin_id:
+            return True, "OK"
         now = int(time.time())
         if await self.db.is_user_blocked(user_id, now):
             return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
@@ -698,6 +827,8 @@ class NewsService:
         return True, "OK"
 
     async def check_user_access(self, user_id: int, *, is_callback: bool = False) -> tuple[bool, str]:
+        if user_id == config.admin_id:
+            return True, "OK"
         now = int(time.time())
         if await self.db.is_user_banned(user_id):
             return False, "Вы забанены. Если считаете это ошибкой, обратитесь к админу."
@@ -739,6 +870,8 @@ class NewsService:
                 await self.run_weekly_crisis_cycle_if_due()
                 await self.publish_daily_missions_if_due()
                 await self.publish_completed_technologies()
+                await self.process_mobilization_plans()
+                await self.publish_weekly_mobilization_summary_if_due()
                 for post_id, source_country, text in due:
                     fake_id = int(time.time()) + post_id
                     await self.enqueue(

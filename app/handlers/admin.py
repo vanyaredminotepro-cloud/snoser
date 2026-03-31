@@ -34,6 +34,7 @@ class AdminState(StatesGroup):
     waiting_unflood_user = State()
     waiting_user_manage_target = State()
     waiting_user_ban_reason = State()
+    waiting_mobilization_amount = State()
 
 
 def _extract_media(message: Message) -> tuple[str | None, str | None]:
@@ -204,6 +205,13 @@ def _main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _mobilization_types_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for key, profile in config.mobilization_profiles.items():
+        rows.append([InlineKeyboardButton(text=str(profile["label"]), callback_data=f"mob:type:{key}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _extract_country_name_from_form(form_text: str) -> str:
     for line in form_text.splitlines():
         raw = line.strip()
@@ -268,23 +276,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer(text, reply_markup=_main_menu_keyboard(is_admin))
 
     @router.message(F.text.startswith("/mobilize"))
-    async def mobilize_cmd(message: Message) -> None:
-        if not await _guard_message(message):
-            return
-        if not message.from_user:
-            return
-        user_id = message.from_user.id
-        countries = _user_allowed_countries(user_id)
-        if not countries and user_id != config.admin_id:
-            await message.answer("У вас нет привязанной страны для мобилизации.")
-            return
-        country = countries[0] if countries else "Обоссляндия"
-        parts = (message.text or "").split()
-        requested_type = parts[1].strip().lower() if len(parts) > 1 else "conscription"
-        ok, report = await service.attempt_mobilization(country, requested_type)
-        await message.answer(report, parse_mode="HTML")
-        if ok:
-            await message.bot.send_message(config.admin_id, f"📌 Мобилизация\n{country}\n{report}")
+    async def mobilize_cmd_disabled(message: Message) -> None:
+        await message.answer("Команда отключена. Используйте кнопку «⚔️ Мобилизация» в меню.")
 
     @router.callback_query(F.data.startswith("menu:"))
     async def menu_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
@@ -332,6 +325,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             country = user_countries[0] if user_countries else "Обоссляндия"
             text = await service.render_mobilization_status(country)
             await callback.message.answer(text, parse_mode="HTML")
+            await callback.message.answer("Выберите тип мобилизации:", reply_markup=_mobilization_types_keyboard())
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)
@@ -829,3 +823,39 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await message.answer(reason)
 
     return router
+    @router.callback_query(F.data.startswith("mob:type:"))
+    async def mobilization_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
+        mob_type = callback.data.split(":", maxsplit=2)[2]
+        user_countries = _user_allowed_countries(callback.from_user.id)
+        if not user_countries and callback.from_user.id != config.admin_id:
+            await callback.answer("Нет страны для мобилизации", show_alert=True)
+            return
+        country = user_countries[0] if user_countries else "Обоссляндия"
+        await state.set_state(AdminState.waiting_mobilization_amount)
+        await state.update_data(mob_country=country, mob_type=mob_type)
+        profile = config.mobilization_profiles.get(mob_type, {})
+        await callback.message.answer(
+            f"Введите количество для мобилизации типа «{profile.get('label', mob_type)}» "
+            f"({profile.get('min_gain', 0)}-{profile.get('max_gain', 0)})."
+        )
+        await callback.answer()
+
+    @router.message(AdminState.waiting_mobilization_amount)
+    async def mobilization_amount_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        raw = (message.text or "").strip()
+        if not re.fullmatch(r"\d{1,4}", raw):
+            await message.answer("Введите число (количество людей).")
+            return
+        amount = int(raw)
+        data = await state.get_data()
+        country = str(data.get("mob_country", ""))
+        mob_type = str(data.get("mob_type", "conscription"))
+        ok, report = await service.start_mobilization(country, mob_type, amount)
+        await message.answer(report)
+        if ok:
+            await message.bot.send_message(config.admin_id, f"📌 Запуск мобилизации\n{country}\n{report}")
+        await state.clear()
