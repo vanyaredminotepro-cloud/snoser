@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 import sys
 from pathlib import Path
 
@@ -99,5 +100,27 @@ def test_stale_news_is_not_recent(tmp_path: Path):
             published_ts=1,
         )
         assert svc._is_recent_news(post, max_hours=48) is False
+
+    asyncio.run(_run())
+
+
+def test_day4_sync_from_recent_mobilization_news(tmp_path: Path):
+    async def _run():
+        svc, db = await _mk_service(tmp_path)
+        await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
+        await db.set_country_war_status("Вилония", "peace")
+        ok, _ = await svc.start_mobilization("Вилония", "conscription", 5)
+        assert ok
+        post = IncomingPost(
+            source_country="Вилония",
+            source_channel="test",
+            message_id=2,
+            text="В стране продолжается мобилизация и призыв.",
+            has_media=False,
+            published_ts=int(time.time()) - (48 * 3600),
+        )
+        await svc._sync_mobilization_day4_from_news(post, post.text)
+        raw = await db.get_state("mobplan:Вилония", "")
+        assert "\"gained\": 3" in raw
 
     asyncio.run(_run())

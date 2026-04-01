@@ -302,6 +302,20 @@ class NewsService:
         return age_hours <= max_hours
 
     @staticmethod
+    def _news_age_hours(post: IncomingPost) -> float:
+        if not post.published_ts:
+            return 0.0
+        return max(0.0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+
+    @staticmethod
+    def _news_has_mobilization_signal(text: str) -> bool:
+        low = text.lower()
+        return any(
+            probe in low
+            for probe in ("мобилизац", "#мобилизация", "призыв", "добровол", "демобилизац", "военный набор")
+        )
+
+    @staticmethod
     def _week_key_utc() -> str:
         return datetime.now(timezone.utc).strftime("%G-W%V")
 
@@ -482,6 +496,7 @@ class NewsService:
             "target": int(requested_amount),
             "gained": 0,
             "active": True,
+            "day4_synced": False,
             "started_ts": int(time.time()),
             "last_tick_ts": 0,
         }
@@ -525,6 +540,52 @@ class NewsService:
             await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
             await self.db.update_country_mobilization(country, mob_type, new_gained, target, week_key, now_ts)
             await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
+
+    async def _sync_mobilization_day4_from_news(self, post: IncomingPost, text: str) -> None:
+        if not post.source_country or post.source_country == "MANUAL":
+            return
+        if self._news_age_hours(post) > 96:
+            return
+        if not self._news_has_mobilization_signal(text):
+            return
+
+        plan_key = f"mobplan:{post.source_country}"
+        raw = await self.db.get_state(plan_key, "")
+        if not raw:
+            return
+        try:
+            plan = json.loads(raw)
+        except Exception:
+            return
+        if not plan.get("active") or plan.get("day4_synced"):
+            return
+
+        target = int(plan.get("target", 0))
+        gained = int(plan.get("gained", 0))
+        if target <= 0:
+            return
+        expected_day4 = max(1, int(round(target * 4 / 7)))
+        if gained >= expected_day4:
+            plan["day4_synced"] = True
+            await self.db.set_state(plan_key, json.dumps(plan, ensure_ascii=False))
+            return
+
+        delta = expected_day4 - gained
+        country = str(plan.get("country", post.source_country))
+        mob_type = str(plan.get("mob_type", "conscription"))
+        soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, mob_type, delta)
+        plan["gained"] = gained + soldiers
+        plan["day4_synced"] = True
+        await self.db.set_state(plan_key, json.dumps(plan, ensure_ascii=False))
+        await self.db.update_country_mobilization(
+            country,
+            mob_type,
+            int(plan["gained"]),
+            target,
+            str(plan.get("week_key", self._week_key_utc())),
+            int(time.time()),
+        )
+        await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
 
     async def publish_weekly_mobilization_summary_if_due(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1104,6 +1165,7 @@ class NewsService:
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
         corrected = self._humanize_text_variation(corrected)
+        await self._sync_mobilization_day4_from_news(post, corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
