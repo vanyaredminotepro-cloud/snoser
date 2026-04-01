@@ -43,6 +43,7 @@ class AppRuntime:
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
+        await service.recover_pending_posts()
         worker_task = asyncio.create_task(service.worker())
         scheduler_task = asyncio.create_task(service.scheduler_worker())
         rss_task = asyncio.create_task(service.rss_worker())
@@ -85,6 +86,7 @@ class AppRuntime:
                 media_file_id=media_file_id,
                 media_type=media_type,
                 submitted_by_user_id=None,
+                published_ts=int(getattr(event.message, "date", None).timestamp()) if getattr(event.message, "date", None) else None,
             )
             await service.enqueue(post)
 
