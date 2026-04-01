@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.services import NewsService
+from app.core.models import IncomingPost
 from app.storage.database import Database
 
 
@@ -82,5 +83,21 @@ def test_admin_is_not_blocked_by_antiflood(tmp_path: Path):
         ok_cb, _ = await svc.check_user_access(5006629901, is_callback=True)
         assert ok_msg is True
         assert ok_cb is True
+
+    asyncio.run(_run())
+
+
+def test_stale_news_is_not_recent(tmp_path: Path):
+    async def _run():
+        svc, _ = await _mk_service(tmp_path)
+        post = IncomingPost(
+            source_country="Вилония",
+            source_channel="test",
+            message_id=1,
+            text="test",
+            has_media=False,
+            published_ts=1,
+        )
+        assert svc._is_recent_news(post, max_hours=48) is False
 
     asyncio.run(_run())

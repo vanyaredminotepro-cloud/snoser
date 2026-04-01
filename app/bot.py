@@ -86,6 +86,7 @@ class AppRuntime:
                 media_file_id=media_file_id,
                 media_type=media_type,
                 submitted_by_user_id=None,
+                published_ts=int(getattr(event.message, "date", None).timestamp()) if getattr(event.message, "date", None) else None,
             )
             await service.enqueue(post)
 

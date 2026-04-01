@@ -709,6 +709,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             media_file_id=file_id,
             media_type=media_type,
             submitted_by_user_id=user_id,
+            published_ts=int(message.date.timestamp()) if getattr(message, "date", None) else None,
         )
         await service.enqueue(post)
         await state.update_data(pending_news_text="")
@@ -740,6 +741,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             media_file_id=payload.get("media_file_id"),
             media_type=payload.get("media_type"),
             submitted_by_user_id=payload.get("submitted_by_user_id"),
+            published_ts=payload.get("published_ts"),
         )
 
         if action == "approve":
@@ -797,6 +799,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             media_file_id=payload.get("media_file_id"),
             media_type=payload.get("media_type"),
             submitted_by_user_id=payload.get("submitted_by_user_id"),
+            published_ts=payload.get("published_ts"),
         )
         hash_value = payload.get("hash_value") or content_hash(f"{post.source_channel}:{post.message_id}:{fixed_text}")
 

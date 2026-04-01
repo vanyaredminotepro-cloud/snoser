@@ -268,6 +268,11 @@ class NewsService:
             return
         population = await self.db.get_country_population(post.source_country)
         budget_delta, army_delta, life_delta, citizens_delta = self._derive_country_stat_deltas(post.text or "", population=population)
+        freshness = self._news_freshness_factor(post)
+        budget_delta = int(round(budget_delta * freshness))
+        army_delta = int(round(army_delta * freshness))
+        life_delta = int(round(life_delta * freshness))
+        citizens_delta = int(round(citizens_delta * freshness))
         if budget_delta == 0 and army_delta == 0 and life_delta == 0 and citizens_delta == 0:
             return
         await self.db.apply_country_stats_delta(
@@ -277,6 +282,24 @@ class NewsService:
             life_delta=life_delta,
             citizens_delta=citizens_delta,
         )
+
+    @staticmethod
+    def _news_freshness_factor(post: IncomingPost) -> float:
+        if not post.published_ts:
+            return 1.0
+        age_hours = max(0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+        if age_hours <= 24:
+            return 1.0
+        if age_hours <= 72:
+            return 0.6
+        return 0.25
+
+    @staticmethod
+    def _is_recent_news(post: IncomingPost, max_hours: int = 120) -> bool:
+        if not post.published_ts:
+            return True
+        age_hours = max(0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+        return age_hours <= max_hours
 
     @staticmethod
     def _week_key_utc() -> str:
@@ -538,6 +561,64 @@ class NewsService:
         else:
             await self.bot.send_message(config.target_channel, summary, parse_mode="HTML")
         await self.db.set_state(state_key, "1")
+
+    async def publish_weekly_country_stats_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        if now.weekday() != 6:
+            return
+        week_key = now.strftime("%G-W%V")
+        sent_key = f"weekly_country_stats_sent:{week_key}"
+        if await self.db.get_state(sent_key, "0") == "1":
+            return
+
+        rows = await self.db.list_country_stats()
+        if not rows:
+            await self.db.set_state(sent_key, "1")
+            return
+
+        prev_key = f"weekly_country_stats_snapshot:{(now - timedelta(days=7)).strftime('%G-W%V')}"
+        prev_raw = await self.db.get_state(prev_key, "{}")
+        try:
+            prev = json.loads(prev_raw)
+        except Exception:
+            prev = {}
+        snapshot = {country: {"budget": b, "army": a, "citizens": c, "life": l} for country, b, a, c, l in rows}
+        await self.db.set_state(f"weekly_country_stats_snapshot:{week_key}", json.dumps(snapshot, ensure_ascii=False))
+
+        map_id = config.premium_emoji_ids.get("MAP", "")
+        econ_id = config.premium_emoji_ids.get("ECONOMY", "")
+        imp_id = config.premium_emoji_ids.get("IMPORTANT", "")
+        dip_id = config.premium_emoji_ids.get("DIPLOMACY", "")
+        warn_id = config.premium_emoji_ids.get("WARNING", "")
+
+        def _delta(new_v: int, old_v: int | None) -> str:
+            if old_v is None:
+                return "новое"
+            d = new_v - old_v
+            if d == 0:
+                return "не изменяется"
+            return f"+{d}" if d > 0 else str(d)
+
+        lines = [
+            "<blockquote>",
+            f"<tg-emoji emoji-id=\"{map_id}\"></tg-emoji> <b>Недельная сводка стран ({week_key})</b>",
+            "</blockquote>",
+        ]
+        for country, budget, army, citizens, life in rows[:10]:
+            old = prev.get(country, {})
+            lines.append(
+                f"\n<b>{country}</b>\n"
+                f"<tg-emoji emoji-id=\"{econ_id}\"></tg-emoji> Бюджет: <b>{budget}</b> ({_delta(budget, old.get('budget'))})\n"
+                f"<tg-emoji emoji-id=\"{imp_id}\"></tg-emoji> Армия: <b>{army}</b> ({_delta(army, old.get('army'))})\n"
+                f"<tg-emoji emoji-id=\"{dip_id}\"></tg-emoji> Граждане: <b>{citizens}</b> ({_delta(citizens, old.get('citizens'))})\n"
+                f"<tg-emoji emoji-id=\"{warn_id}\"></tg-emoji> Жизнь: <b>{life}</b> ({_delta(life, old.get('life'))})"
+            )
+        text = "\n".join(lines)
+        if self.user_client:
+            await self.user_client.send_message(config.target_channel, text, parse_mode="html")
+        else:
+            await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+        await self.db.set_state(sent_key, "1")
 
     async def render_country_stats_card(self, country: str) -> str:
         rows = await self.db.list_country_stats()
@@ -872,6 +953,7 @@ class NewsService:
                 await self.publish_completed_technologies()
                 await self.process_mobilization_plans()
                 await self.publish_weekly_mobilization_summary_if_due()
+                await self.publish_weekly_country_stats_if_due()
                 for post_id, source_country, text in due:
                     fake_id = int(time.time()) + post_id
                     await self.enqueue(
@@ -1002,6 +1084,9 @@ class NewsService:
         if await self._is_daily_limit_reached():
             logger.info("Daily limit reached (%s), ignore %s/%s", config.daily_post_limit, post.source_channel, post.message_id)
             await self._metric_inc("daily_limit_hit")
+            return True
+        if not self._is_recent_news(post):
+            logger.info("Skip stale news %s/%s (published_ts=%s)", post.source_channel, post.message_id, post.published_ts)
             return True
 
         source_text = (post.text or "").strip()
@@ -1197,6 +1282,7 @@ class NewsService:
             "media_file_id": post.media_file_id,
             "media_type": post.media_type,
             "submitted_by_user_id": post.submitted_by_user_id,
+            "published_ts": post.published_ts,
             "review_mode": review_mode,
             "hash_value": content_hash(f"{post.source_channel}:{post.message_id}:{text}"),
         }
