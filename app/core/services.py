@@ -316,6 +316,20 @@ class NewsService:
         )
 
     @staticmethod
+    def _seconds_until_week_end() -> int:
+        now = datetime.now(timezone.utc)
+        days_until_next_monday = (7 - now.weekday()) % 7 or 7
+        week_end = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=days_until_next_monday)
+        return max(1, int((week_end - now).total_seconds()))
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        d, rem = divmod(max(0, seconds), 86400)
+        h, rem = divmod(rem, 3600)
+        m, s = divmod(rem, 60)
+        return f"{d}д {h}ч {m}м {s}с"
+
+    @staticmethod
     def _week_key_utc() -> str:
         return datetime.now(timezone.utc).strftime("%G-W%V")
 
@@ -502,7 +516,14 @@ class NewsService:
         }
         await self.db.set_state(plan_key, json.dumps(payload, ensure_ascii=False))
         await self.db.update_country_mobilization(country, mob_type, 0, requested_amount, week_key, int(time.time()))
-        return True, f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед."
+        left = self._seconds_until_week_end()
+        finish_dt = datetime.now(timezone.utc) + timedelta(seconds=left)
+        return (
+            True,
+            f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед.\n"
+            f"⏱ Длительность: {self._format_duration(left)}\n"
+            f"📅 Завершится: {finish_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        )
 
     async def process_mobilization_plans(self) -> None:
         now_ts = int(time.time())
@@ -1146,9 +1167,6 @@ class NewsService:
             logger.info("Daily limit reached (%s), ignore %s/%s", config.daily_post_limit, post.source_channel, post.message_id)
             await self._metric_inc("daily_limit_hit")
             return True
-        if not self._is_recent_news(post):
-            logger.info("Skip stale news %s/%s (published_ts=%s)", post.source_channel, post.message_id, post.published_ts)
-            return True
 
         source_text = (post.text or "").strip()
         if not source_text and not post.has_media:
@@ -1165,6 +1183,9 @@ class NewsService:
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
         corrected = self._humanize_text_variation(corrected)
+        age_h = self._news_age_hours(post)
+        if age_h > 168:
+            corrected = f"Архивная новость (задержка публикации): {corrected}"
         await self._sync_mobilization_day4_from_news(post, corrected)
 
         ai_result = self.ai_guard.analyze(corrected)

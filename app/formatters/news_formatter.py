@@ -20,6 +20,7 @@ class NewsFormatter:
         "map": "🌐",
         "default": "👀",
     }
+    _default_emoji_cursor = 0
     default_emoji_cycle = [
         "👀", "💭", "📈", "⚠️", "🌐", "❗️", "🛰️", "🏛️", "🧭", "🗞️", "📌", "🕰️", "🧱", "📣", "🛡️", "⚡", "✅", "📊", "📢",
         "🔔", "🚨", "📰", "🗳️", "🧪", "🏗️", "🧰", "🔬", "💡", "🧩", "🔗", "🪙", "🏦", "💹", "📉", "💼", "🛠️", "🚧", "🪖",
@@ -514,7 +515,13 @@ class NewsFormatter:
     def _emoji_char_and_id(self, paragraph: str, premium_emoji_ids: dict[str, str] | None) -> tuple[str, int | None]:
         label = self._emoji_label(paragraph)
         variants = self.emoji_variants.get(label, [self.paragraph_emoji_fallback[label]])
-        fallback = self._stable_pick(variants, paragraph)
+        if label == "default" and variants:
+            non_eye = [e for e in variants if e != "👀"] or variants
+            idx = NewsFormatter._default_emoji_cursor % len(non_eye)
+            fallback = non_eye[idx]
+            NewsFormatter._default_emoji_cursor += 1
+        else:
+            fallback = self._stable_pick(variants, paragraph)
         emoji_key = self.emoji_to_key.get(fallback, label.upper())
         custom_id_raw = (premium_emoji_ids or {}).get(emoji_key) or (premium_emoji_ids or {}).get("DEFAULT")
         return fallback, int(custom_id_raw) if custom_id_raw else None
