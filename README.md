@@ -290,3 +290,26 @@ The IDs are configured in `app/config.py` under `premium_emoji_ids`.
 pip install -r requirements.txt
 python web/app.py
 ```
+
+## web_research (независимый дисплей исследований)
+
+Новая независимая панель лежит в `web_research/`:
+
+```text
+web_research/
+├── app.py
+├── requirements.txt
+├── templates/index.html
+├── static/css/style.css
+├── static/js/main.js
+└── config.py
+```
+
+Запуск:
+
+```bash
+pip install -r web_research/requirements.txt
+python web_research/app.py
+```
+
+По умолчанию URL: `http://localhost:5000`.
