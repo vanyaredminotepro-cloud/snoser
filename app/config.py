@@ -52,22 +52,57 @@ def _optional_env_int(*names: str) -> Optional[int]:
         raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
+def _optional_env_bool(*names: str, default: bool = False) -> bool:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    names_str = ", ".join(names)
+    raise RuntimeError(f"Environment variable {names_str} must be a boolean (true/false, 1/0)")
+
+
+def _optional_env_float(*names: str) -> Optional[float]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must be a float") from exc
+
+
 @dataclass(slots=True)
 class Config:
     api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
     api_hash: Optional[str] = field(default_factory=lambda: _first_present_env("TG_API_HASH", "API_HASH"))
     bot_token: Optional[str] = field(default_factory=lambda: _first_present_env("TG_BOT_TOKEN", "BOT_TOKEN"))
 
-    admin_id: int = 5006629901
-    admin_username: str = "@supermegaluti"
+    admin_id: int = field(default_factory=lambda: _optional_env_int("ADMIN_ID") or 5006629901)
+    admin_username: str = field(default_factory=lambda: _first_present_env("ADMIN_USERNAME") or "@supermegaluti")
 
-    target_channel: str = "@novostnikobosslandia"
-    publish_delay_seconds: float = 0.0
+    target_channel: str = field(default_factory=lambda: _first_present_env("TARGET_CHANNEL") or "@novostnikobosslandia")
+    publish_delay_seconds: float = field(default_factory=lambda: float(_first_present_env("PUBLISH_DELAY_SECONDS") or "0.0"))
+    queue_ingest_delay_min: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MIN") or 2.0)
+    queue_ingest_delay_max: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MAX") or 5.0)
+    queue_publish_delay_min: float = field(default_factory=lambda: _optional_env_float("QUEUE_PUBLISH_DELAY_MIN") or 3.0)
+    queue_publish_delay_max: float = field(default_factory=lambda: _optional_env_float("QUEUE_PUBLISH_DELAY_MAX") or 9.0)
+    long_pause_chance: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_CHANCE") or 0.20)
+    long_pause_min: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_MIN") or 15.0)
+    long_pause_max: float = field(default_factory=lambda: _optional_env_float("LONG_PAUSE_MAX") or 20.0)
+    daily_post_limit: int = field(default_factory=lambda: _optional_env_int("DAILY_POST_LIMIT") or 30)
 
-    session_name: str = "news_userbot"
-    sqlite_path: Path = Path("app/storage/bot_data.sqlite3")
-    logs_dir: Path = Path("logs")
+    session_name: str = field(default_factory=lambda: _first_present_env("SESSION_NAME") or "news_userbot")
+    sqlite_path: Path = field(default_factory=lambda: Path(_first_present_env("SQLITE_PATH") or "app/storage/bot_data.sqlite3"))
+    logs_dir: Path = field(default_factory=lambda: Path(_first_present_env("LOGS_DIR") or "logs"))
     emoji_storage_path: Path = Path("app/storage/emojis.json")
+    port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
+    healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
+    web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
@@ -268,6 +303,70 @@ class Config:
             "Белоярск": {"territories_month": 1, "alliances": 0, "treaties": 0, "stability_index": 60, "quality_percent": 75},
         }
     )
+    mobilization_profiles: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {
+            "conscription": {
+                "label": "Призывы",
+                "min_gain": 2,
+                "max_gain": 5,
+                "requirements": {"factories": 0, "war_status": []},
+                "effects": {"budget_pct": 0.0, "life_pct": 0.0, "risk_delta": 0},
+                "penalty": {"mode": "warn"},
+            },
+            "voluntary": {
+                "label": "Добровольная",
+                "min_gain": 5,
+                "max_gain": 10,
+                "requirements": {"factories": 1, "war_status": []},
+                "effects": {"budget_pct": 0.0, "life_pct": 0.05, "risk_delta": 0},
+                "penalty": {"mode": "block", "days": 3},
+            },
+            "partial": {
+                "label": "Частичная",
+                "min_gain": 10,
+                "max_gain": 20,
+                "requirements": {"factories": 1, "war_status": ["threat", "martial_law", "war", "total_war"]},
+                "effects": {"budget_pct": -0.05, "life_pct": 0.0, "risk_delta": 0},
+                "penalty": {"mode": "budget_pct", "value": -0.10},
+            },
+            "normal": {
+                "label": "Обычная",
+                "min_gain": 15,
+                "max_gain": 30,
+                "requirements": {"factories": 1, "war_status": ["martial_law", "war", "total_war"]},
+                "effects": {"budget_pct": -0.10, "life_pct": -0.05, "risk_delta": 0},
+                "penalty": {"mode": "warn_demob", "demob_pct": 0.10},
+            },
+            "aggressive": {
+                "label": "Агрессивная",
+                "min_gain": 25,
+                "max_gain": 50,
+                "requirements": {"factories": 2, "war_status": ["war", "total_war"]},
+                "effects": {"budget_pct": -0.20, "life_pct": -0.10, "risk_delta": 5},
+                "penalty": {"mode": "warn_demob", "demob_pct": 0.20},
+            },
+            "total": {
+                "label": "Всеобщая",
+                "min_gain": 40,
+                "max_gain": 80,
+                "requirements": {"factories": 2, "war_status": ["total_war", "war"]},
+                "effects": {"budget_pct": -0.30, "life_pct": -0.20, "risk_delta": 15},
+                "penalty": {"mode": "hard"},
+            },
+        }
+    )
+
+    def __post_init__(self) -> None:
+        if self.queue_ingest_delay_min < 0 or self.queue_ingest_delay_max < 0:
+            raise RuntimeError("QUEUE_INGEST_DELAY_* must be >= 0")
+        if self.queue_publish_delay_min < 0 or self.queue_publish_delay_max < 0:
+            raise RuntimeError("QUEUE_PUBLISH_DELAY_* must be >= 0")
+        if self.long_pause_min < 0 or self.long_pause_max < 0:
+            raise RuntimeError("LONG_PAUSE_* must be >= 0")
+        if not (0.0 <= self.long_pause_chance <= 1.0):
+            raise RuntimeError("LONG_PAUSE_CHANCE must be between 0 and 1")
+        if self.daily_post_limit <= 0:
+            raise RuntimeError("DAILY_POST_LIMIT must be > 0")
 
 
 _load_dotenv_if_present()
