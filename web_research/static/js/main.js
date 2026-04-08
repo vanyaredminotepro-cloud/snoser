@@ -1,4 +1,4 @@
-const state = { countries: [], selectedCountryId: null, techTree: {}, active: [], opened: [] };
+const state = { countries: [], selectedCountryId: null, techTree: {}, active: [], opened: [], history: [] };
 const categoryOrder = ["drones", "rockets", "aviation", "navy", "armor", "technology"];
 const categoryTitles = {drones:"🛸 Дроны", rockets:"💥 Ракеты", aviation:"✈️ Авиация", navy:"🚤 Флот", armor:"🛡️ Бронетехника", technology:"📡 Технологии"};
 
@@ -46,9 +46,25 @@ function renderActive() {
       <small>Старт: ${new Date(r.start_date).toLocaleString()} | Финиш: ${new Date(r.end_date).toLocaleString()}</small><br>
       <small>Осталось: ${fmtTimer(r.end_date)}</small>
       <div class="bar"><i style="width:${p}%"></i></div>
-      <small>${p.toFixed(1)}%</small>
+      <small>${p.toFixed(1)}%</small><br>
+      <button class=\"start cancel\" data-id=\"${r.id}\">Отменить (админ)</button>
     </div>`;
   }).join("");
+  root.querySelectorAll(".cancel").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/admin/research/${btn.dataset.id}/cancel`, {method: "POST"});
+        await loadAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    });
+  });
+
+  const hist = document.getElementById("historyResearch");
+  hist.innerHTML = state.history.length
+    ? state.history.map((h) => `<div class=\"active-item\"><b>${h.tech_id}</b> • ${h.action}<br><small>${h.created_at}</small></div>`).join("")
+    : "<p>История пуста</p>";
 }
 
 function renderTech() {
@@ -83,7 +99,11 @@ function renderTech() {
       } else if (status.available) {
         statusEl.textContent = "Доступно"; statusEl.classList.add("ok");
       } else {
-        statusEl.textContent = `Недоступно: ${status.missing_requirements.join(", ") || "требования"}`;
+        const reasons = [];
+        if ((status.missing_requirements || []).length) reasons.push(`нужны: ${status.missing_requirements.join(", ")}`);
+        if (status.has_budget === false) reasons.push("не хватает бюджета");
+        if (status.has_factories === false) reasons.push(`заводы: ${status.needed_factories}+`);
+        statusEl.textContent = `Недоступно: ${reasons.join("; ") || "требования"}`;
         statusEl.classList.add("warn");
       }
 
@@ -109,6 +129,7 @@ async function loadAll() {
   state.techTree = await api(`/api/tech_tree?country_id=${encodeURIComponent(state.selectedCountryId || "")}`);
   state.active = await api("/api/research/active");
   state.opened = state.selectedCountryId ? await api(`/api/country_tech/${state.selectedCountryId}`) : [];
+  state.history = state.selectedCountryId ? await api(`/api/research/history/${state.selectedCountryId}`) : [];
   renderCountries();
   renderActive();
   renderTech();

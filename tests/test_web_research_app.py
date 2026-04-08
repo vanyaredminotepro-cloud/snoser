@@ -34,3 +34,6 @@ def test_api_research_start(tmp_path, monkeypatch):
     assert res.status_code == 200
     active = client.get("/api/research/active")
     assert len(active.get_json()) == 1
+    history = client.get("/api/research/history/1")
+    assert history.status_code == 200
+    assert len(history.get_json()) >= 1

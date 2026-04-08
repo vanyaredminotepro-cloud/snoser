@@ -31,6 +31,22 @@ from app.utils.text_tools import autocorrect_news_text, content_hash, strip_emoj
 
 logger = logging.getLogger(__name__)
 
+RESEARCH_EFFECTS_DEFAULTS: dict[str, dict[str, object]] = {
+    "drone_recon": {"unlock_unit": "recon_drone"},
+    "drone_strike": {"unlock_unit": "strike_drone"},
+    "rocket_short": {"unlock_unit": "short_rocket"},
+    "rocket_medium": {"unlock_unit": "medium_rocket", "risk_delta": 3},
+    "air_recon": {"unlock_unit": "recon_plane"},
+    "air_drone_carrier": {"unlock_unit": "drone_carrier"},
+    "boat_patrol": {"unlock_unit": "patrol_boat"},
+    "boat_missile": {"unlock_unit": "missile_boat"},
+    "landing_craft": {"unlock_unit": "landing_craft"},
+    "armor_light": {"unlock_unit": "light_armor"},
+    "tech_radar": {"army_pct": 0.05},
+    "tech_cyber": {"risk_delta": -5},
+    "tech_factory": {"budget_delta": 3000, "life_delta": 1},
+}
+
 
 class NewsService:
     def __init__(self, bot: Bot, db: Database):
@@ -1114,7 +1130,7 @@ class NewsService:
     async def publish_completed_technologies(self) -> None:
         due = await self.db.due_technology_projects(int(time.time()))
         if not due:
-            return
+            due = []
         for _, country, tech_name in due:
             await self.db.apply_country_stats_delta(country, life_delta=1, budget_delta=3000)
             text = (
@@ -1128,6 +1144,82 @@ class NewsService:
                 await self.user_client.send_message(config.target_channel, text, parse_mode="html")
             else:
                 await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+        await self.process_completed_research()
+
+    async def process_completed_research(self) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        due = await self.db.due_active_research(now_iso)
+        if not due:
+            return
+        for item in due:
+            country_id = int(item["country_id"])
+            tech_id = str(item["tech_id"])
+            country_name = await self.db.country_name_by_id(country_id)
+            effects = RESEARCH_EFFECTS_DEFAULTS.get(tech_id, {}).copy()
+            try:
+                custom = json.loads(item.get("effects") or "{}")
+                if isinstance(custom, dict):
+                    effects.update(custom)
+            except Exception:
+                pass
+
+            if effects.get("unlock_unit"):
+                await self.db.add_country_unit(country_id, str(effects["unlock_unit"]), 1)
+            await self.db.add_country_tech(country_id, tech_id)
+
+            budget_delta = int(effects.get("budget_delta", 0) or 0)
+            life_delta = int(effects.get("life_delta", 0) or 0)
+            risk_delta = int(effects.get("risk_delta", 0) or 0)
+            army_pct = float(effects.get("army_pct", 0.0) or 0.0)
+            if army_pct:
+                stats_rows = await self.db.list_country_stats()
+                for c_name, _, army, _, _ in stats_rows:
+                    if c_name == country_name:
+                        await self.db.apply_country_stats_delta(
+                            country_name,
+                            army_delta=max(1, int(int(army) * army_pct)),
+                            budget_delta=budget_delta,
+                            life_delta=life_delta,
+                            risk_delta=risk_delta,
+                        )
+                        break
+            elif budget_delta or life_delta or risk_delta:
+                await self.db.apply_country_stats_delta(
+                    country_name,
+                    budget_delta=budget_delta,
+                    life_delta=life_delta,
+                    risk_delta=risk_delta,
+                )
+
+            await self.db.complete_active_research(int(item["id"]))
+            await self.db.add_research_log(
+                country_id,
+                tech_id,
+                "completed",
+                json.dumps({"effects": effects}, ensure_ascii=False),
+            )
+
+            text = (
+                "<blockquote><b>🔬 ИССЛЕДОВАНИЕ ЗАВЕРШЕНО</b>\n"
+                f"<i>{escape(country_name)}</i></blockquote>\n"
+                f"<b>Технология:</b> {escape(item['name'])}\n"
+                f"<b>Эффекты:</b> {escape(json.dumps(effects, ensure_ascii=False))}"
+            )
+            reply_to = item.get("start_message_id")
+            if self.user_client:
+                await self.user_client.send_message(
+                    config.target_channel,
+                    text,
+                    parse_mode="html",
+                    reply_to=reply_to if reply_to else None,
+                )
+            else:
+                await self.bot.send_message(
+                    config.target_channel,
+                    text,
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to if reply_to else None,
+                )
 
     async def rss_worker(self) -> None:
         if not config.rss_feeds:

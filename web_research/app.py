@@ -69,6 +69,8 @@ def ensure_schema() -> None:
                 duration_days INTEGER NOT NULL,
                 start_date TEXT NOT NULL,
                 end_date TEXT NOT NULL,
+                start_message_id INTEGER,
+                effects TEXT NOT NULL DEFAULT '{}',
                 status TEXT NOT NULL DEFAULT 'active'
             )
             """
@@ -83,6 +85,26 @@ def ensure_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS research_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                country_id INTEGER NOT NULL,
+                tech_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        try:
+            conn.execute("ALTER TABLE active_research ADD COLUMN start_message_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE active_research ADD COLUMN effects TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
 
@@ -146,6 +168,16 @@ def api_country_tech(country_id: int):
     return jsonify([dict(r) for r in rows])
 
 
+@app.get("/api/research/history/<int:country_id>")
+def api_research_history(country_id: int):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, tech_id, action, details_json, created_at FROM research_logs WHERE country_id = ? ORDER BY id DESC LIMIT 100",
+            (country_id,),
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 @app.get("/api/tech_tree")
 def api_tech_tree():
     country_id = request.args.get("country_id", type=int)
@@ -153,6 +185,18 @@ def api_tech_tree():
         return jsonify(TECH_TREE)
 
     with get_db() as conn:
+        country = resolve_country(conn, country_id)
+        country_budget = int(country["budget"]) if country else 0
+        factories = 0
+        try:
+            if table_exists(conn, "military_factories") and country:
+                row_f = conn.execute(
+                    "SELECT factories_count FROM military_factories WHERE country = ?",
+                    (country["name"],),
+                ).fetchone()
+                factories = int(row_f[0]) if row_f else 0
+        except Exception:
+            factories = 0
         opened = {
             row[0]
             for row in conn.execute(
@@ -165,12 +209,18 @@ def api_tech_tree():
     for tech_id, tech in TECH_TREE.items():
         req = list(tech.get("requirements", []))
         missing = [item for item in req if item not in opened]
+        has_budget = country_budget >= int(tech.get("cost", 0))
+        needed_factories = int(tech.get("factories", 0) or 0)
+        has_factories = factories >= needed_factories
         enriched[tech_id] = {
             **tech,
             "status": {
                 "opened": tech_id in opened,
-                "available": not missing,
+                "available": (not missing) and has_budget and has_factories,
                 "missing_requirements": missing,
+                "has_budget": has_budget,
+                "has_factories": has_factories,
+                "needed_factories": needed_factories,
             },
         }
     return jsonify(enriched)
@@ -261,8 +311,8 @@ def api_research_start():
         deduct_budget(conn, country_id, budget - cost)
         conn.execute(
             """
-            INSERT INTO active_research (country_id, tech_id, name, category, duration_days, start_date, end_date, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+            INSERT INTO active_research (country_id, tech_id, name, category, duration_days, start_date, end_date, effects, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
             """,
             (
                 country_id,
@@ -272,11 +322,36 @@ def api_research_start():
                 int(tech["duration"]),
                 start_date.isoformat(),
                 end_date.isoformat(),
+                json.dumps({"from_web": True}, ensure_ascii=False),
             ),
+        )
+        conn.execute(
+            "INSERT INTO research_logs (country_id, tech_id, action, details_json) VALUES (?, ?, 'started', ?)",
+            (country_id, tech_id, json.dumps({"cost": cost}, ensure_ascii=False)),
         )
         conn.commit()
 
     return jsonify({"ok": True, "start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
+
+
+@app.post("/api/admin/research/<int:research_id>/cancel")
+def api_cancel_research(research_id: int):
+    if not authorize():
+        return jsonify({"error": "Unauthorized"}), 401
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT country_id, tech_id FROM active_research WHERE id = ? AND status = 'active'",
+            (research_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Active research not found"}), 404
+        conn.execute("UPDATE active_research SET status = 'cancelled' WHERE id = ?", (research_id,))
+        conn.execute(
+            "INSERT INTO research_logs (country_id, tech_id, action, details_json) VALUES (?, ?, 'cancelled', ?)",
+            (int(row["country_id"]), str(row["tech_id"]), json.dumps({"by": "admin"}, ensure_ascii=False)),
+        )
+        conn.commit()
+    return jsonify({"ok": True})
 
 
 ensure_schema()
