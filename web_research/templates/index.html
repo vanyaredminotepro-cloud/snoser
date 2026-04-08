@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Обоссляндия — Исследования</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <header class="hero">
+    <div class="logo">⚛️</div>
+    <div>
+      <h1>Обоссляндия — Исследования</h1>
+      <p>Панель исследований, прогресса и запуска технологий</p>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel countries">
+      <h2>🏳️ Страны</h2>
+      <select id="countrySelect"></select>
+      <div id="countryStats" class="stats"></div>
+      <h3>Открытые технологии</h3>
+      <div id="openedTech" class="chips"></div>
+    </section>
+
+    <section class="panel active">
+      <h2>⏱️ Активные исследования</h2>
+      <div id="activeResearch"></div>
+      <h3>📜 История</h3>
+      <div id="historyResearch"></div>
+    </section>
+
+    <section class="panel full">
+      <h2>🧬 Технологии</h2>
+      <div id="techGroups"></div>
+    </section>
+  </main>
+
+  <template id="techCardTemplate">
+    <article class="tech-card reveal">
+      <h4 class="title"></h4>
+      <p class="desc"></p>
+      <p class="meta"></p>
+      <p class="req"></p>
+      <p class="status"></p>
+      <button class="start">Исследовать</button>
+    </article>
+  </template>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

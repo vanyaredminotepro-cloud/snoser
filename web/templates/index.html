@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Исследования</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}"/>
+</head>
+<body>
+  <header><h1>🔬 Исследования</h1></header>
+  <main>
+    <section class="card">
+      <label>Страна</label>
+      <select id="country"></select>
+      <div id="stats"></div>
+    </section>
+    <section class="card">
+      <h2>Активные</h2>
+      <div id="active"></div>
+    </section>
+    <section class="card full">
+      <h2>Tech Tree</h2>
+      <div id="tree" class="grid"></div>
+    </section>
+  </main>
+  <template id="techTpl">
+    <article class="tech">
+      <h3 class="name"></h3>
+      <p class="desc"></p>
+      <p class="meta"></p>
+      <p class="status"></p>
+      <button>Исследовать</button>
+    </article>
+  </template>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

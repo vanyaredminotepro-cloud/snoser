@@ -7,13 +7,15 @@ import re
 import time
 import uuid
 from collections import deque
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from telethon import TelegramClient
-from telethon.errors import RPCError
+from telethon.errors import FloodWaitError, RPCError
 
 from app.config import config
 from app.core.models import IncomingPost
@@ -29,6 +31,22 @@ from app.utils.text_tools import autocorrect_news_text, content_hash, strip_emoj
 
 logger = logging.getLogger(__name__)
 
+RESEARCH_EFFECTS_DEFAULTS: dict[str, dict[str, object]] = {
+    "drone_recon": {"unlock_unit": "recon_drone"},
+    "drone_strike": {"unlock_unit": "strike_drone"},
+    "rocket_short": {"unlock_unit": "short_rocket"},
+    "rocket_medium": {"unlock_unit": "medium_rocket", "risk_delta": 3},
+    "air_recon": {"unlock_unit": "recon_plane"},
+    "air_drone_carrier": {"unlock_unit": "drone_carrier"},
+    "boat_patrol": {"unlock_unit": "patrol_boat"},
+    "boat_missile": {"unlock_unit": "missile_boat"},
+    "landing_craft": {"unlock_unit": "landing_craft"},
+    "armor_light": {"unlock_unit": "light_armor"},
+    "tech_radar": {"army_pct": 0.05},
+    "tech_cyber": {"risk_delta": -5},
+    "tech_factory": {"budget_delta": 3000, "life_delta": 1},
+}
+
 
 class NewsService:
     def __init__(self, bot: Bot, db: Database):
@@ -43,6 +61,7 @@ class NewsService:
         self.emoji_loader = EmojiPackLoader(config.emoji_storage_path)
         self.pack_emoji_cache: dict[str, int] = self.emoji_loader.read_cache()
         self.queue: asyncio.Queue[IncomingPost] = asyncio.Queue(maxsize=3000)
+        self._queued_keys: set[str] = set()
         self.user_windows: dict[int, deque[int]] = {}
         self.action_windows: dict[int, deque[int]] = {}
 
@@ -71,6 +90,32 @@ class NewsService:
                             config.source_channels[key] = value
         except Exception:
             logger.exception("Failed to load dynamic source-channels config")
+
+    @staticmethod
+    def _post_queue_key(post: IncomingPost) -> str:
+        return f"{post.source_country}|{post.source_channel}|{post.message_id}"
+
+    async def recover_pending_posts(self) -> int:
+        recovered = 0
+        for key, payload_json in await self.db.list_pending_posts(limit=2000):
+            try:
+                payload = json.loads(payload_json)
+                post = IncomingPost(**payload)
+                if key in self._queued_keys:
+                    continue
+                await self.queue.put(post)
+                self._queued_keys.add(key)
+                recovered += 1
+            except Exception:
+                logger.exception("Failed to recover pending post %s", key)
+        if recovered:
+            logger.info("Recovered %s pending posts from DB", recovered)
+        return recovered
+
+    async def _metric_inc(self, key: str, step: int = 1) -> None:
+        metric_key = f"metric:{key}"
+        cur = int(await self.db.get_state(metric_key, "0") or "0")
+        await self.db.set_state(metric_key, str(cur + step))
 
     @staticmethod
     def _known_country_terms() -> set[str]:
@@ -239,6 +284,11 @@ class NewsService:
             return
         population = await self.db.get_country_population(post.source_country)
         budget_delta, army_delta, life_delta, citizens_delta = self._derive_country_stat_deltas(post.text or "", population=population)
+        freshness = self._news_freshness_factor(post)
+        budget_delta = int(round(budget_delta * freshness))
+        army_delta = int(round(army_delta * freshness))
+        life_delta = int(round(life_delta * freshness))
+        citizens_delta = int(round(citizens_delta * freshness))
         if budget_delta == 0 and army_delta == 0 and life_delta == 0 and citizens_delta == 0:
             return
         await self.db.apply_country_stats_delta(
@@ -248,6 +298,425 @@ class NewsService:
             life_delta=life_delta,
             citizens_delta=citizens_delta,
         )
+
+    @staticmethod
+    def _news_freshness_factor(post: IncomingPost) -> float:
+        if not post.published_ts:
+            return 1.0
+        age_hours = max(0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+        if age_hours <= 24:
+            return 1.0
+        if age_hours <= 72:
+            return 0.6
+        return 0.25
+
+    @staticmethod
+    def _is_recent_news(post: IncomingPost, max_hours: int = 120) -> bool:
+        if not post.published_ts:
+            return True
+        age_hours = max(0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+        return age_hours <= max_hours
+
+    @staticmethod
+    def _news_age_hours(post: IncomingPost) -> float:
+        if not post.published_ts:
+            return 0.0
+        return max(0.0, (int(time.time()) - int(post.published_ts)) / 3600.0)
+
+    @staticmethod
+    def _news_has_mobilization_signal(text: str) -> bool:
+        low = text.lower()
+        return any(
+            probe in low
+            for probe in ("мобилизац", "#мобилизация", "призыв", "добровол", "демобилизац", "военный набор")
+        )
+
+    @staticmethod
+    def _seconds_until_week_end() -> int:
+        now = datetime.now(timezone.utc)
+        days_until_next_monday = (7 - now.weekday()) % 7 or 7
+        week_end = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=days_until_next_monday)
+        return max(1, int((week_end - now).total_seconds()))
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        d, rem = divmod(max(0, seconds), 86400)
+        h, rem = divmod(rem, 3600)
+        m, s = divmod(rem, 60)
+        return f"{d}д {h}ч {m}м {s}с"
+
+    @staticmethod
+    def _week_key_utc() -> str:
+        return datetime.now(timezone.utc).strftime("%G-W%V")
+
+    async def calculate_mobilization_gain(self, country: str, requested_type: str) -> tuple[int, int, int]:
+        profile = config.mobilization_profiles[requested_type]
+        min_gain = int(profile["min_gain"])
+        max_gain = int(profile["max_gain"])
+        _, used, weekly_limit, last_week = await self.db.get_country_mobilization(country)
+        week_key = self._week_key_utc()
+
+        if last_week != week_key:
+            used = 0
+            weekly_limit = random.randint(min_gain, max_gain)
+        elif weekly_limit <= 0:
+            weekly_limit = random.randint(min_gain, max_gain)
+
+        remaining = max(0, weekly_limit - used)
+        if remaining <= 0:
+            return 0, used, weekly_limit
+
+        gain = min(remaining, random.randint(min_gain, max_gain))
+        return gain, used, weekly_limit
+
+    async def apply_mobilization_effects(self, country: str, mob_type: str, soldiers_gained: int) -> tuple[int, int, int, int]:
+        profile = config.mobilization_profiles[mob_type]
+        effects = profile["effects"]
+        await self.db.apply_country_stats_delta(country, army_delta=soldiers_gained)
+        budget_change, life_change, risk_change = await self.db.apply_country_multipliers(
+            country,
+            budget_pct=float(effects["budget_pct"]),
+            life_pct=float(effects["life_pct"]),
+            risk_delta=int(effects["risk_delta"]),
+        )
+        return soldiers_gained, budget_change, life_change, risk_change
+
+    async def attempt_mobilization(self, country: str, requested_type: str) -> tuple[bool, str]:
+        if requested_type not in config.mobilization_profiles:
+            return False, "Неизвестный тип мобилизации."
+
+        profile = config.mobilization_profiles[requested_type]
+        req = profile["requirements"]
+        factories = await self.db.get_military_factories(country)
+        war_status, _ = await self.db.get_country_war_and_risk(country)
+
+        min_factories = int(req["factories"])
+        allowed_statuses = [str(s) for s in req["war_status"]]
+        if factories < min_factories:
+            return False, f"Требуется военных заводов: {min_factories}, сейчас: {factories}."
+        if allowed_statuses and war_status not in allowed_statuses:
+            return False, f"Требуется один из статусов: {', '.join(allowed_statuses)}. Сейчас: {war_status}."
+
+        gained, used, weekly_limit = await self.calculate_mobilization_gain(country, requested_type)
+        week_key = self._week_key_utc()
+        if gained <= 0:
+            penalty = profile["penalty"]
+            penalty_msg = "Лимит недели исчерпан."
+            if penalty["mode"] == "warn":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                penalty_msg = f"Лимит недели исчерпан. Выдан варн #{warn_count}."
+            elif penalty["mode"] == "block":
+                block_until = int(time.time()) + int(penalty.get("days", 3)) * 86400
+                await self.db.set_state(f"mob_block:{country}", str(block_until))
+                penalty_msg = f"Лимит исчерпан. Мобилизация заблокирована на {penalty.get('days', 3)} дня."
+            elif penalty["mode"] == "budget_pct":
+                budget_change, _, _ = await self.db.apply_country_multipliers(country, budget_pct=float(penalty.get("value", -0.10)))
+                penalty_msg = f"Лимит исчерпан. Применён бюджетный штраф: {budget_change}."
+            elif penalty["mode"] == "warn_demob":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                stats = await self.db.get_country_stats(country)
+                army = stats[1] if stats else 0
+                demob = -int(army * float(penalty.get("demob_pct", 0.10)))
+                await self.db.apply_country_stats_delta(country, army_delta=demob)
+                penalty_msg = f"Лимит исчерпан. Варн #{warn_count}, демобилизация {abs(demob)}."
+            elif penalty["mode"] == "hard":
+                warn_count = await self.db.add_country_warning(country, f"Mobilization overflow: {requested_type}")
+                stats = await self.db.get_country_stats(country)
+                army = stats[1] if stats else 0
+                demob = -int(army * 0.30)
+                budget_change, _, _ = await self.db.apply_country_multipliers(country, budget_pct=-0.50)
+                await self.db.apply_country_stats_delta(country, army_delta=demob)
+                penalty_msg = f"Лимит исчерпан. Варн #{warn_count}, бюджет {budget_change}, демобилизация {abs(demob)}."
+
+            await self.db.add_mobilization_log(country, requested_type, 0, 0, 0, 0, penalized=True)
+            return False, f"Ваша страна уже набрала максимум солдат на этой неделе. {penalty_msg}"
+
+        soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, requested_type, gained)
+        await self.db.update_country_mobilization(
+            country=country,
+            mobilization_type=requested_type,
+            mobilization_amount=used + gained,
+            weekly_limit=weekly_limit,
+            week_key=week_key,
+            ts=int(time.time()),
+        )
+        await self.db.add_mobilization_log(
+            country=country,
+            mobilization_type=requested_type,
+            soldiers_gained=soldiers,
+            budget_change=budget_change,
+            life_change=life_change,
+            risk_change=risk_change,
+            penalized=False,
+        )
+        msg = (
+            f"✅ Мобилизация: {profile['label']} ({requested_type})\n"
+            f"Набрано: +{soldiers} солдат\n"
+            f"Неделя: {used + gained}/{weekly_limit}\n"
+            f"Бюджет: {budget_change:+d}, жизнь: {life_change:+d}, риск: {risk_change:+d}"
+        )
+        return True, msg
+
+    async def render_mobilization_status(self, country: str) -> str:
+        mob_type, used, weekly_limit, week_key = await self.db.get_country_mobilization(country)
+        factories = await self.db.get_military_factories(country)
+        war_status, risk = await self.db.get_country_war_and_risk(country)
+        plan_raw = await self.db.get_state(f"mobplan:{country}", "")
+        active = False
+        target = 0
+        if plan_raw:
+            try:
+                plan = json.loads(plan_raw)
+                active = bool(plan.get("active"))
+                target = int(plan.get("target", 0))
+            except Exception:
+                pass
+        lines = [
+            f"<b>⚔️ Мобилизация: {country}</b>",
+            f"Тип: <b>{config.mobilization_profiles.get(mob_type, {}).get('label', mob_type)}</b>",
+            f"Лимит недели: <b>{used}/{weekly_limit if weekly_limit > 0 else 'не задан'}</b>",
+            f"План недели: <b>{target if target > 0 else 'не выбран'}</b> ({'активен' if active else 'не активен'})",
+            f"Неделя: <i>{week_key or self._week_key_utc()}</i>",
+            f"Военные заводы: <b>{factories}</b>",
+            f"Статус войны: <b>{war_status}</b>, риск: <b>{risk}</b>",
+            "",
+            "<b>Доступные типы:</b>",
+        ]
+        for key, profile in config.mobilization_profiles.items():
+            req = profile["requirements"]
+            lines.append(
+                f"• <b>{profile['label']}</b> — {profile['min_gain']}-{profile['max_gain']}/нед, "
+                f"заводы>={req['factories']}, статусы: {', '.join(req['war_status']) if req['war_status'] else 'любой'}"
+            )
+        return "\n".join(lines)
+
+    async def start_mobilization(self, country: str, mob_type: str, requested_amount: int) -> tuple[bool, str]:
+        if mob_type not in config.mobilization_profiles:
+            return False, "Неизвестный тип мобилизации."
+        profile = config.mobilization_profiles[mob_type]
+        min_gain = int(profile["min_gain"])
+        max_gain = int(profile["max_gain"])
+        if requested_amount < min_gain or requested_amount > max_gain:
+            return False, f"Для этого типа доступно от {min_gain} до {max_gain} чел. в неделю."
+
+        req = profile["requirements"]
+        factories = await self.db.get_military_factories(country)
+        war_status, _ = await self.db.get_country_war_and_risk(country)
+        if factories < int(req["factories"]):
+            return False, f"Нужно военных заводов: {req['factories']}, сейчас: {factories}."
+        statuses = [str(s) for s in req["war_status"]]
+        if statuses and war_status not in statuses:
+            return False, f"Нужен статус: {', '.join(statuses)}. Сейчас: {war_status}."
+
+        week_key = self._week_key_utc()
+        plan_key = f"mobplan:{country}"
+        plan_raw = await self.db.get_state(plan_key, "")
+        if plan_raw:
+            try:
+                plan = json.loads(plan_raw)
+                if plan.get("active") and plan.get("week_key") == week_key:
+                    return False, "Мобилизация уже запущена на эту неделю. Дождитесь завершения."
+            except Exception:
+                pass
+
+        payload = {
+            "country": country,
+            "mob_type": mob_type,
+            "week_key": week_key,
+            "target": int(requested_amount),
+            "gained": 0,
+            "active": True,
+            "day4_synced": False,
+            "started_ts": int(time.time()),
+            "last_tick_ts": 0,
+        }
+        await self.db.set_state(plan_key, json.dumps(payload, ensure_ascii=False))
+        await self.db.update_country_mobilization(country, mob_type, 0, requested_amount, week_key, int(time.time()))
+        left = self._seconds_until_week_end()
+        finish_dt = datetime.now(timezone.utc) + timedelta(seconds=left)
+        return (
+            True,
+            f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед.\n"
+            f"⏱ Длительность: {self._format_duration(left)}\n"
+            f"📅 Завершится: {finish_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        )
+
+    async def process_mobilization_plans(self) -> None:
+        now_ts = int(time.time())
+        week_key = self._week_key_utc()
+        for key, raw in await self.db.list_state_prefix("mobplan:"):
+            try:
+                plan = json.loads(raw)
+            except Exception:
+                continue
+            if not plan.get("active"):
+                continue
+            if plan.get("week_key") != week_key:
+                plan["active"] = False
+                await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+                continue
+            if now_ts - int(plan.get("last_tick_ts", 0)) < 6 * 3600:
+                continue
+
+            country = str(plan["country"])
+            mob_type = str(plan["mob_type"])
+            target = int(plan["target"])
+            gained = int(plan.get("gained", 0))
+            remaining = max(0, target - gained)
+            if remaining <= 0:
+                plan["active"] = False
+                await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+                continue
+            soldiers_chunk = max(1, min(remaining, max(1, target // 7)))
+            soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, mob_type, soldiers_chunk)
+            new_gained = gained + soldiers
+            plan["gained"] = new_gained
+            plan["last_tick_ts"] = now_ts
+            if new_gained >= target:
+                plan["active"] = False
+            await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+            await self.db.update_country_mobilization(country, mob_type, new_gained, target, week_key, now_ts)
+            await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
+
+    async def _sync_mobilization_day4_from_news(self, post: IncomingPost, text: str) -> None:
+        if not post.source_country or post.source_country == "MANUAL":
+            return
+        if self._news_age_hours(post) > 96:
+            return
+        if not self._news_has_mobilization_signal(text):
+            return
+
+        plan_key = f"mobplan:{post.source_country}"
+        raw = await self.db.get_state(plan_key, "")
+        if not raw:
+            return
+        try:
+            plan = json.loads(raw)
+        except Exception:
+            return
+        if not plan.get("active") or plan.get("day4_synced"):
+            return
+
+        target = int(plan.get("target", 0))
+        gained = int(plan.get("gained", 0))
+        if target <= 0:
+            return
+        expected_day4 = max(1, int(round(target * 4 / 7)))
+        if gained >= expected_day4:
+            plan["day4_synced"] = True
+            await self.db.set_state(plan_key, json.dumps(plan, ensure_ascii=False))
+            return
+
+        delta = expected_day4 - gained
+        country = str(plan.get("country", post.source_country))
+        mob_type = str(plan.get("mob_type", "conscription"))
+        soldiers, budget_change, life_change, risk_change = await self.apply_mobilization_effects(country, mob_type, delta)
+        plan["gained"] = gained + soldiers
+        plan["day4_synced"] = True
+        await self.db.set_state(plan_key, json.dumps(plan, ensure_ascii=False))
+        await self.db.update_country_mobilization(
+            country,
+            mob_type,
+            int(plan["gained"]),
+            target,
+            str(plan.get("week_key", self._week_key_utc())),
+            int(time.time()),
+        )
+        await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
+
+    async def publish_weekly_mobilization_summary_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        if now.weekday() != 6:
+            return
+        week_key = now.strftime("%G-W%V")
+        state_key = f"mob_summary:{week_key}"
+        if await self.db.get_state(state_key, "0") == "1":
+            return
+
+        monday = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=6)
+        from_ts = int(monday.timestamp())
+        to_ts = int((monday + timedelta(days=7)).timestamp())
+        rows = await self.db.aggregate_mobilization_logs(from_ts, to_ts)
+        if not rows:
+            await self.db.set_state(state_key, "1")
+            return
+
+        def _fmt(v: int) -> str:
+            if v == 0:
+                return "не изменяется"
+            return f"+{v}" if v > 0 else str(v)
+
+        lines = ["<b>📊 Недельная мобилизационная сводка</b>"]
+        for country, soldiers, budget_ch, life_ch, risk_ch in rows:
+            lines.append(
+                f"\n<b>{country}</b>\n"
+                f"Солдаты: {_fmt(soldiers)} | Бюджет: {_fmt(budget_ch)} | "
+                f"Жизнь: {_fmt(life_ch)} | Риск: {_fmt(risk_ch)}"
+            )
+        summary = "\n".join(lines)
+        if self.user_client:
+            await self.user_client.send_message(config.target_channel, summary, parse_mode="html")
+        else:
+            await self.bot.send_message(config.target_channel, summary, parse_mode="HTML")
+        await self.db.set_state(state_key, "1")
+
+    async def publish_weekly_country_stats_if_due(self) -> None:
+        now = datetime.now(timezone.utc)
+        if now.weekday() != 6:
+            return
+        week_key = now.strftime("%G-W%V")
+        sent_key = f"weekly_country_stats_sent:{week_key}"
+        if await self.db.get_state(sent_key, "0") == "1":
+            return
+
+        rows = await self.db.list_country_stats()
+        if not rows:
+            await self.db.set_state(sent_key, "1")
+            return
+
+        prev_key = f"weekly_country_stats_snapshot:{(now - timedelta(days=7)).strftime('%G-W%V')}"
+        prev_raw = await self.db.get_state(prev_key, "{}")
+        try:
+            prev = json.loads(prev_raw)
+        except Exception:
+            prev = {}
+        snapshot = {country: {"budget": b, "army": a, "citizens": c, "life": l} for country, b, a, c, l in rows}
+        await self.db.set_state(f"weekly_country_stats_snapshot:{week_key}", json.dumps(snapshot, ensure_ascii=False))
+
+        map_id = config.premium_emoji_ids.get("MAP", "")
+        econ_id = config.premium_emoji_ids.get("ECONOMY", "")
+        imp_id = config.premium_emoji_ids.get("IMPORTANT", "")
+        dip_id = config.premium_emoji_ids.get("DIPLOMACY", "")
+        warn_id = config.premium_emoji_ids.get("WARNING", "")
+
+        def _delta(new_v: int, old_v: int | None) -> str:
+            if old_v is None:
+                return "новое"
+            d = new_v - old_v
+            if d == 0:
+                return "не изменяется"
+            return f"+{d}" if d > 0 else str(d)
+
+        lines = [
+            "<blockquote>",
+            f"<tg-emoji emoji-id=\"{map_id}\"></tg-emoji> <b>Недельная сводка стран ({week_key})</b>",
+            "</blockquote>",
+        ]
+        for country, budget, army, citizens, life in rows[:10]:
+            old = prev.get(country, {})
+            lines.append(
+                f"\n<b>{country}</b>\n"
+                f"<tg-emoji emoji-id=\"{econ_id}\"></tg-emoji> Бюджет: <b>{budget}</b> ({_delta(budget, old.get('budget'))})\n"
+                f"<tg-emoji emoji-id=\"{imp_id}\"></tg-emoji> Армия: <b>{army}</b> ({_delta(army, old.get('army'))})\n"
+                f"<tg-emoji emoji-id=\"{dip_id}\"></tg-emoji> Граждане: <b>{citizens}</b> ({_delta(citizens, old.get('citizens'))})\n"
+                f"<tg-emoji emoji-id=\"{warn_id}\"></tg-emoji> Жизнь: <b>{life}</b> ({_delta(life, old.get('life'))})"
+            )
+        text = "\n".join(lines)
+        if self.user_client:
+            await self.user_client.send_message(config.target_channel, text, parse_mode="html")
+        else:
+            await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+        await self.db.set_state(sent_key, "1")
 
     async def render_country_stats_card(self, country: str) -> str:
         rows = await self.db.list_country_stats()
@@ -441,9 +910,84 @@ class NewsService:
         await self.db.set_state("paused", "1" if paused else "0")
 
     async def enqueue(self, post: IncomingPost) -> None:
+        key = self._post_queue_key(post)
+        if key in self._queued_keys:
+            return
+        await self.db.save_pending_post(key, json.dumps(asdict(post), ensure_ascii=False), int(time.time()))
+        if self.queue.full():
+            logger.warning("Queue is full, keep post in pending storage: %s", key)
+            await self._metric_inc("queue_overflow")
+            return
+        ingest_min = min(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
+        ingest_max = max(config.queue_ingest_delay_min, config.queue_ingest_delay_max)
+        await asyncio.sleep(random.uniform(ingest_min, ingest_max))
+        if self.queue.full():
+            logger.warning("Queue became full after ingest delay, keep post in pending storage: %s", key)
+            await self._metric_inc("queue_overflow")
+            return
         await self.queue.put(post)
+        self._queued_keys.add(key)
+
+    @staticmethod
+    def _daily_limit_key() -> str:
+        return f"publish_count:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+
+    async def _is_daily_limit_reached(self) -> bool:
+        current = int(await self.db.get_state(self._daily_limit_key(), "0") or "0")
+        return current >= max(1, config.daily_post_limit)
+
+    async def _increment_daily_count(self) -> None:
+        key = self._daily_limit_key()
+        current = int(await self.db.get_state(key, "0") or "0")
+        await self.db.set_state(key, str(current + 1))
+
+    async def _wait_human_publish_delay(self) -> None:
+        delay_min = min(config.queue_publish_delay_min, config.queue_publish_delay_max)
+        delay_max = max(config.queue_publish_delay_min, config.queue_publish_delay_max)
+        await asyncio.sleep(random.uniform(delay_min, delay_max))
+        if random.random() < max(0.0, min(1.0, config.long_pause_chance)):
+            lp_min = min(config.long_pause_min, config.long_pause_max)
+            lp_max = max(config.long_pause_min, config.long_pause_max)
+            await asyncio.sleep(random.uniform(lp_min, lp_max))
+
+    @staticmethod
+    def _humanize_text_variation(text: str) -> str:
+        out = text
+        if random.random() < 0.20 and ". " in out and "\n\n" not in out:
+            first, rest = out.split(". ", 1)
+            out = f"{first}.\n\n{rest}"
+        if random.random() < 0.15 and "\n\n#" in out:
+            out = out.replace("\n\n#", "\n#", 1)
+        return out
+
+    async def _send_with_retry(self, sender) -> None:
+        retries_left = 5
+        while True:
+            try:
+                await sender()
+                return
+            except TelegramRetryAfter as exc:
+                wait_s = max(1, int(getattr(exc, "retry_after", 3)))
+                logger.warning("TelegramRetryAfter: wait %ss", wait_s)
+                await self._metric_inc("retry_after")
+                await asyncio.sleep(wait_s)
+            except FloodWaitError as exc:
+                wait_s = max(1, int(getattr(exc, "seconds", 3)))
+                logger.warning("FloodWaitError: wait %ss", wait_s)
+                await self._metric_inc("flood_wait")
+                await asyncio.sleep(wait_s)
+            except (TelegramBadRequest, RPCError):
+                if retries_left <= 0:
+                    raise
+                retries_left -= 1
+                backoff = random.uniform(4.0, 10.0)
+                logger.exception("Telegram publish error, retry in %.1fs (left=%s)", backoff, retries_left)
+                await self._metric_inc("publish_retry")
+                await asyncio.sleep(backoff)
 
     async def check_antiflood(self, user_id: int) -> tuple[bool, str]:
+        if user_id == config.admin_id:
+            return True, "OK"
         now = int(time.time())
         if await self.db.is_user_blocked(user_id, now):
             return False, "Вы были заблокированы за спам. Чтобы вас разблокировали, обратитесь к @supermegaluti"
@@ -462,6 +1006,8 @@ class NewsService:
         return True, "OK"
 
     async def check_user_access(self, user_id: int, *, is_callback: bool = False) -> tuple[bool, str]:
+        if user_id == config.admin_id:
+            return True, "OK"
         now = int(time.time())
         if await self.db.is_user_banned(user_id):
             return False, "Вы забанены. Если считаете это ошибкой, обратитесь к админу."
@@ -483,11 +1029,15 @@ class NewsService:
     async def worker(self) -> None:
         while True:
             post = await self.queue.get()
+            key = self._post_queue_key(post)
             try:
-                await self.process_post(post)
+                terminal_done = await self.process_post(post)
+                if terminal_done:
+                    await self.db.delete_pending_post(key)
             except Exception:
                 logger.exception("Unhandled error on post processing")
             finally:
+                self._queued_keys.discard(key)
                 self.queue.task_done()
 
     async def scheduler_worker(self) -> None:
@@ -499,6 +1049,9 @@ class NewsService:
                 await self.run_weekly_crisis_cycle_if_due()
                 await self.publish_daily_missions_if_due()
                 await self.publish_completed_technologies()
+                await self.process_mobilization_plans()
+                await self.publish_weekly_mobilization_summary_if_due()
+                await self.publish_weekly_country_stats_if_due()
                 for post_id, source_country, text in due:
                     fake_id = int(time.time()) + post_id
                     await self.enqueue(
@@ -577,7 +1130,7 @@ class NewsService:
     async def publish_completed_technologies(self) -> None:
         due = await self.db.due_technology_projects(int(time.time()))
         if not due:
-            return
+            due = []
         for _, country, tech_name in due:
             await self.db.apply_country_stats_delta(country, life_delta=1, budget_delta=3000)
             text = (
@@ -591,6 +1144,82 @@ class NewsService:
                 await self.user_client.send_message(config.target_channel, text, parse_mode="html")
             else:
                 await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+        await self.process_completed_research()
+
+    async def process_completed_research(self) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        due = await self.db.due_active_research(now_iso)
+        if not due:
+            return
+        for item in due:
+            country_id = int(item["country_id"])
+            tech_id = str(item["tech_id"])
+            country_name = await self.db.country_name_by_id(country_id)
+            effects = RESEARCH_EFFECTS_DEFAULTS.get(tech_id, {}).copy()
+            try:
+                custom = json.loads(item.get("effects") or "{}")
+                if isinstance(custom, dict):
+                    effects.update(custom)
+            except Exception:
+                pass
+
+            if effects.get("unlock_unit"):
+                await self.db.add_country_unit(country_id, str(effects["unlock_unit"]), 1)
+            await self.db.add_country_tech(country_id, tech_id)
+
+            budget_delta = int(effects.get("budget_delta", 0) or 0)
+            life_delta = int(effects.get("life_delta", 0) or 0)
+            risk_delta = int(effects.get("risk_delta", 0) or 0)
+            army_pct = float(effects.get("army_pct", 0.0) or 0.0)
+            if army_pct:
+                stats_rows = await self.db.list_country_stats()
+                for c_name, _, army, _, _ in stats_rows:
+                    if c_name == country_name:
+                        await self.db.apply_country_stats_delta(
+                            country_name,
+                            army_delta=max(1, int(int(army) * army_pct)),
+                            budget_delta=budget_delta,
+                            life_delta=life_delta,
+                            risk_delta=risk_delta,
+                        )
+                        break
+            elif budget_delta or life_delta or risk_delta:
+                await self.db.apply_country_stats_delta(
+                    country_name,
+                    budget_delta=budget_delta,
+                    life_delta=life_delta,
+                    risk_delta=risk_delta,
+                )
+
+            await self.db.complete_active_research(int(item["id"]))
+            await self.db.add_research_log(
+                country_id,
+                tech_id,
+                "completed",
+                json.dumps({"effects": effects}, ensure_ascii=False),
+            )
+
+            text = (
+                "<blockquote><b>🔬 ИССЛЕДОВАНИЕ ЗАВЕРШЕНО</b>\n"
+                f"<i>{escape(country_name)}</i></blockquote>\n"
+                f"<b>Технология:</b> {escape(item['name'])}\n"
+                f"<b>Эффекты:</b> {escape(json.dumps(effects, ensure_ascii=False))}"
+            )
+            reply_to = item.get("start_message_id")
+            if self.user_client:
+                await self.user_client.send_message(
+                    config.target_channel,
+                    text,
+                    parse_mode="html",
+                    reply_to=reply_to if reply_to else None,
+                )
+            else:
+                await self.bot.send_message(
+                    config.target_channel,
+                    text,
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to if reply_to else None,
+                )
 
     async def rss_worker(self) -> None:
         if not config.rss_feeds:
@@ -622,25 +1251,34 @@ class NewsService:
                 logger.exception("RSS worker failed")
             await asyncio.sleep(max(10, config.rss_poll_seconds))
 
-    async def process_post(self, post: IncomingPost) -> None:
+    async def process_post(self, post: IncomingPost) -> bool:
         if await self.is_paused():
             logger.info("Paused; skip post %s/%s", post.source_channel, post.message_id)
-            return
+            return False
+        if await self._is_daily_limit_reached():
+            logger.info("Daily limit reached (%s), ignore %s/%s", config.daily_post_limit, post.source_channel, post.message_id)
+            await self._metric_inc("daily_limit_hit")
+            return True
 
         source_text = (post.text or "").strip()
         if not source_text and not post.has_media:
             logger.info("Empty message skip: %s/%s", post.source_channel, post.message_id)
-            return
+            return True
 
         hash_value = content_hash(f"{post.source_channel}:{post.source_country}:{strip_hashtags(source_text)}")
         if await self.db.is_duplicate(hash_value):
             logger.info("Duplicate skip: %s", hash_value)
-            return
+            return True
 
         translated = await self.translator.to_russian(source_text) if source_text else ""
         corrected = autocorrect_news_text(strip_emojis(translated or source_text))
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
+        corrected = self._humanize_text_variation(corrected)
+        age_h = self._news_age_hours(post)
+        if age_h > 168:
+            corrected = f"Архивная новость (задержка публикации): {corrected}"
+        await self._sync_mobilization_day4_from_news(post, corrected)
 
         ai_result = self.ai_guard.analyze(corrected)
         if not ai_result.allowed:
@@ -660,7 +1298,7 @@ class NewsService:
                 )
             if post.has_media:
                 await self.send_to_moderation(post, corrected or "[MEDIA]", ai_result.reason, raw_text=corrected)
-            return
+            return True
 
         filter_result = self.rp_filter.check(
             corrected or "media news",
@@ -679,7 +1317,7 @@ class NewsService:
                 )
             if post.has_media:
                 await self.send_to_moderation(post, corrected or "[MEDIA]", filter_result.reason, raw_text=corrected)
-            return
+            return True
 
         await self._apply_diplomacy_and_tech(post, corrected)
         formatted, entities = self._render_post(post, corrected)
@@ -693,7 +1331,7 @@ class NewsService:
                 raw_text=corrected,
                 suggestion="Уточните формулировки: цель, действия, участники и результат. При необходимости нажмите «Поправить».",
             )
-            return
+            return True
 
         if post.has_media:
             await self.send_to_moderation(
@@ -703,12 +1341,32 @@ class NewsService:
                 raw_text=corrected,
                 suggestion="Проверьте соответствие RP и подпись к медиа. Если нужно — нажмите «Поправить».",
             )
-            return
+            return True
 
-        if config.publish_delay_seconds > 0:
-            await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
+        if self._is_research_post(corrected):
+            research_html = self._render_research_html(post.source_country, corrected, formatted)
+            published = await self.publish_and_mark(post, research_html, None, hash_value, auto_passed=True, html_mode=True)
+        else:
+            published = await self.publish_and_mark(post, formatted, entities, hash_value, auto_passed=True)
+        return published
 
-        await self.publish_and_mark(post, formatted, entities, hash_value, auto_passed=True)
+    @staticmethod
+    def _is_research_post(text: str) -> bool:
+        low = text.lower()
+        return any(token in low for token in ["исследован", "#исследование", "#research", "лаборатор", "эксперимент", "научн"])
+
+    @staticmethod
+    def _render_research_html(country: str, raw_text: str, fallback_text: str) -> str:
+        snippets = [s.strip() for s in re.split(r"\n{2,}", raw_text) if s.strip()]
+        headline = escape(snippets[0] if snippets else fallback_text.splitlines()[0])
+        body = escape(" ".join(snippets[1:]) if len(snippets) > 1 else raw_text)
+        return (
+            "<blockquote>"
+            f"<b>🧪 Исследование · {escape(country)}</b>\n"
+            f"<i>{headline}</i>"
+            "</blockquote>\n\n"
+            f"{body[:1200]}"
+        )
 
     async def publish_and_mark(
         self,
@@ -717,34 +1375,62 @@ class NewsService:
         entities: list | None,
         hash_value: str,
         auto_passed: bool = False,
-    ) -> None:
+        html_mode: bool = False,
+    ) -> bool:
         try:
+            await self._wait_human_publish_delay()
+            if config.publish_delay_seconds > 0:
+                await asyncio.sleep(min(config.publish_delay_seconds, 3.0))
             if self.user_client:
-                await self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+                if html_mode:
+                    await self._send_with_retry(
+                        lambda: self.user_client.send_message(config.target_channel, formatted, parse_mode="html")
+                    )
+                else:
+                    await self._send_with_retry(
+                        lambda: self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+                    )
             else:
-                await self.bot.send_message(chat_id=config.target_channel, text=formatted)
+                await self._send_with_retry(
+                    lambda: self.bot.send_message(chat_id=config.target_channel, text=formatted, parse_mode="HTML" if html_mode else None)
+                )
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
+            await self._metric_inc("publish_ok")
             logger.info("Published %s/%s", post.source_channel, post.message_id)
+            return True
         except (TelegramBadRequest, RPCError):
             logger.exception("Publish failed")
+            await self._metric_inc("publish_failed")
+            return False
 
     async def publish_media_and_mark(self, post: IncomingPost, caption: str, hash_value: str, auto_passed: bool = False) -> None:
         try:
+            await self._wait_human_publish_delay()
             if self.user_client and post.media_file_id:
-                await self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "photo" and post.media_file_id:
-                await self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "video" and post.media_file_id:
-                await self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             elif post.media_type == "animation" and post.media_file_id:
-                await self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
+                await self._send_with_retry(
+                    lambda: self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
+                )
             else:
                 await self.publish_and_mark(post, caption, None, hash_value, auto_passed=auto_passed)
                 return
 
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
+            await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
             await self._apply_country_stats_effect(post)
             logger.info("Published media %s/%s", post.source_channel, post.message_id)
@@ -771,6 +1457,7 @@ class NewsService:
             "media_file_id": post.media_file_id,
             "media_type": post.media_type,
             "submitted_by_user_id": post.submitted_by_user_id,
+            "published_ts": post.published_ts,
             "review_mode": review_mode,
             "hash_value": content_hash(f"{post.source_channel}:{post.message_id}:{text}"),
         }

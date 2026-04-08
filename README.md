@@ -103,6 +103,28 @@ TG_API_HASH=0123456789abcdef0123456789abcdef
 TG_BOT_TOKEN=123456:ABCDEF...
 ```
 
+Дополнительно (для прод/railway) можно задать:
+
+```env
+ADMIN_ID=5006629901
+ADMIN_USERNAME=@your_admin_username
+TARGET_CHANNEL=@your_target_channel
+SESSION_NAME=news_userbot
+SQLITE_PATH=app/storage/bot_data.sqlite3
+LOGS_DIR=logs
+PUBLISH_DELAY_SECONDS=0
+QUEUE_INGEST_DELAY_MIN=2
+QUEUE_INGEST_DELAY_MAX=5
+QUEUE_PUBLISH_DELAY_MIN=3
+QUEUE_PUBLISH_DELAY_MAX=9
+LONG_PAUSE_CHANCE=0.2
+LONG_PAUSE_MIN=15
+LONG_PAUSE_MAX=20
+DAILY_POST_LIMIT=30
+PORT=8080
+HEALTHCHECK_ENABLED=true
+```
+
 Изменяемые параметры:
 - источники
 - хештеги стран
@@ -138,6 +160,9 @@ python app/main.py
 4. Проверить логи деплоя.
 5. Убедиться, что бот онлайн и видит источники.
 
+Подробный гайд: `RAILWAY_DEPLOY_GUIDE.md`  
+Частые проблемы и фиксы: `RAILWAY_TROUBLESHOOTING.md`
+
 ## Админ-гайд
 
 - `/start` — открывает меню кнопок.
@@ -171,6 +196,7 @@ python app/main.py
 - SQLite для устойчивости к рестартам.
 - Авто-restart на Railway (`ON_FAILURE`).
 - uvloop для ускорения event loop.
+- Встроенный health endpoint (`200 OK`) на `PORT` для Railway health checks.
 
 ## Важные примечания
 
@@ -251,3 +277,39 @@ The IDs are configured in `app/config.py` under `premium_emoji_ids`.
 - `emoji_packs` в `app/config.py` (ссылки `https://t.me/addemoji/...`),
 - кнопку `Emoji reload` в админ-панели (перезагрузка и кэш в `app/storage/emojis.json`).
 - По умолчанию подключён только `NewsEmoji`; если у вас другие паки, добавьте их ссылки в `config.emoji_packs` и нажмите `Emoji reload`.
+
+## Веб-исследования
+
+- В главном меню бота есть кнопка **🔬 Исследования (WEB)** — она открывает URL из `WEB_DASHBOARD_URL`.
+- Веб-панель находится в `web/` и показывает страны, активные исследования и полное дерево технологий.
+- Для защищённого запуска исследований можно задать `WEB_API_TOKEN` и передавать `X-API-Key`.
+
+Запуск:
+
+```bash
+pip install -r requirements.txt
+python web/app.py
+```
+
+## web_research (независимый дисплей исследований)
+
+Новая независимая панель лежит в `web_research/`:
+
+```text
+web_research/
+├── app.py
+├── requirements.txt
+├── templates/index.html
+├── static/css/style.css
+├── static/js/main.js
+└── config.py
+```
+
+Запуск:
+
+```bash
+pip install -r web_research/requirements.txt
+python web_research/app.py
+```
+
+По умолчанию URL: `http://localhost:5000`.

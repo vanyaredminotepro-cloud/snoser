@@ -11,3 +11,4 @@ class IncomingPost:
     media_file_id: str | None = None
     media_type: str | None = None
     submitted_by_user_id: int | None = None
+    published_ts: int | None = None

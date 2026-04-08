@@ -119,3 +119,18 @@ def test_military_text_gets_non_default_emoji() -> None:
     )
     first_line = text.splitlines()[0]
     assert not first_line.startswith("👀 "), first_line
+
+
+def test_emoji_to_key_covers_expanded_variants() -> None:
+    # New expanded variants should still map to semantic premium keys.
+    assert NewsFormatter.emoji_to_key.get("🛰️") in {"MAP", "WARNING", "DEFAULT"}
+    assert NewsFormatter.emoji_to_key.get("💸") == "ECONOMY"
+    assert NewsFormatter.emoji_to_key.get("🗳️") == "DIPLOMACY"
+    assert NewsFormatter.emoji_to_key.get("⚡") == "WARNING"
+    assert NewsFormatter.emoji_to_key.get("⚡️") == "WARNING"
+
+
+def test_rewrite_replaces_our_country_phrase_with_specific_country() -> None:
+    fmt = NewsFormatter()
+    rewritten = fmt.rewrite("Вилония", "В нашей стране проводятся масштабные исследования.")
+    assert "в вилонии" in rewritten.lower()

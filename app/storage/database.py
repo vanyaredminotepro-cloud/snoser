@@ -223,6 +223,16 @@ class Database:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS pending_posts (
+                    queue_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS user_bans (
                     user_id INTEGER PRIMARY KEY,
                     banned_at INTEGER NOT NULL,
@@ -231,11 +241,134 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS military_factories (
+                    country TEXT PRIMARY KEY,
+                    factories_count INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_mobilization (
+                    country TEXT PRIMARY KEY,
+                    mobilization_type TEXT NOT NULL DEFAULT 'conscription',
+                    last_mobilization_date INTEGER NOT NULL DEFAULT 0,
+                    mobilization_amount INTEGER NOT NULL DEFAULT 0,
+                    weekly_limit INTEGER NOT NULL DEFAULT 0,
+                    last_mobilization_week TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mobilization_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    mobilization_type TEXT NOT NULL,
+                    soldiers_gained INTEGER NOT NULL DEFAULT 0,
+                    budget_change INTEGER NOT NULL DEFAULT 0,
+                    life_change INTEGER NOT NULL DEFAULT 0,
+                    risk_change INTEGER NOT NULL DEFAULT 0,
+                    penalized INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS active_research (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country_id INTEGER NOT NULL,
+                    tech_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    duration_days INTEGER NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    start_message_id INTEGER,
+                    effects TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'active'
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_tech (
+                    country_id INTEGER NOT NULL,
+                    tech_id TEXT NOT NULL,
+                    unlocked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (country_id, tech_id)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_units (
+                    country_id INTEGER NOT NULL,
+                    unit_type TEXT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (country_id, unit_type)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country_id INTEGER NOT NULL,
+                    tech_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            try:
+                await db.execute("ALTER TABLE active_research ADD COLUMN start_message_id INTEGER")
+            except aiosqlite.OperationalError:
+                pass
+            try:
+                await db.execute("ALTER TABLE active_research ADD COLUMN effects TEXT NOT NULL DEFAULT '{}'")
+            except aiosqlite.OperationalError:
+                pass
             try:
                 await db.execute("ALTER TABLE country_stats ADD COLUMN citizens INTEGER NOT NULL DEFAULT 100")
             except aiosqlite.OperationalError:
                 pass
+            try:
+                await db.execute("ALTER TABLE country_stats ADD COLUMN war_status TEXT NOT NULL DEFAULT 'peace'")
+            except aiosqlite.OperationalError:
+                pass
+            try:
+                await db.execute("ALTER TABLE country_stats ADD COLUMN risk_index INTEGER NOT NULL DEFAULT 0")
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
+
+    async def save_pending_post(self, queue_key: str, payload_json: str, now_ts: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO pending_posts (queue_key, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(queue_key) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+                (queue_key, payload_json, now_ts, now_ts),
+            )
+            await db.commit()
+
+    async def delete_pending_post(self, queue_key: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM pending_posts WHERE queue_key = ?", (queue_key,))
+            await db.commit()
+
+    async def list_pending_posts(self, limit: int = 500) -> list[tuple[str, str]]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT queue_key, payload_json FROM pending_posts ORDER BY created_at ASC LIMIT ?",
+                (int(limit),),
+            )
+            rows = await cursor.fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
 
     async def is_duplicate(self, content_hash: str) -> bool:
         async with aiosqlite.connect(self.path) as db:
@@ -264,6 +397,12 @@ class Database:
             cursor = await db.execute("SELECT value FROM app_state WHERE key = ?", (key,))
             row = await cursor.fetchone()
         return row[0] if row else default
+
+    async def list_state_prefix(self, prefix: str) -> list[tuple[str, str]]:
+        like = f"{prefix}%"
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute("SELECT key, value FROM app_state WHERE key LIKE ?", (like,))).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
 
     async def store_moderation_payload(self, token: str, payload: str) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -441,12 +580,134 @@ class Database:
             return None
         return int(row[0]), int(row[1]), int(row[2]), int(row[3])
 
+    async def get_country_war_and_risk(self, country: str) -> tuple[str, int]:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT war_status, risk_index FROM country_stats WHERE country = ?",
+                (country,),
+            )).fetchone()
+        if not row:
+            return "peace", 0
+        return str(row[0] or "peace"), int(row[1] or 0)
+
+    async def set_country_war_status(self, country: str, war_status: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("INSERT OR IGNORE INTO country_stats (country) VALUES (?)", (country,))
+            await db.execute("UPDATE country_stats SET war_status = ?, updated_at = CURRENT_TIMESTAMP WHERE country = ?", (war_status, country))
+            await db.commit()
+
     async def list_country_stats(self) -> list[tuple[str, int, int, int, int]]:
         async with aiosqlite.connect(self.path) as db:
             rows = await (await db.execute(
                 "SELECT country, budget, army, citizens, life_level FROM country_stats ORDER BY budget DESC, army DESC"
             )).fetchall()
         return [(str(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows]
+
+    async def get_military_factories(self, country: str) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT factories_count FROM military_factories WHERE country = ?",
+                (country,),
+            )).fetchone()
+        return int(row[0]) if row else 0
+
+    async def set_military_factories(self, country: str, count: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO military_factories (country, factories_count) VALUES (?, ?) "
+                "ON CONFLICT(country) DO UPDATE SET factories_count = excluded.factories_count",
+                (country, max(0, int(count))),
+            )
+            await db.commit()
+
+    async def get_country_mobilization(self, country: str) -> tuple[str, int, int, str]:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_mobilization (country) VALUES (?)",
+                (country,),
+            )
+            row = await (await db.execute(
+                "SELECT mobilization_type, mobilization_amount, weekly_limit, last_mobilization_week "
+                "FROM country_mobilization WHERE country = ?",
+                (country,),
+            )).fetchone()
+            await db.commit()
+        return str(row[0]), int(row[1]), int(row[2]), str(row[3] or "")
+
+    async def update_country_mobilization(
+        self,
+        country: str,
+        mobilization_type: str,
+        mobilization_amount: int,
+        weekly_limit: int,
+        week_key: str,
+        ts: int,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO country_mobilization (country, mobilization_type, mobilization_amount, weekly_limit, last_mobilization_week, last_mobilization_date) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(country) DO UPDATE SET "
+                "mobilization_type = excluded.mobilization_type, "
+                "mobilization_amount = excluded.mobilization_amount, "
+                "weekly_limit = excluded.weekly_limit, "
+                "last_mobilization_week = excluded.last_mobilization_week, "
+                "last_mobilization_date = excluded.last_mobilization_date",
+                (country, mobilization_type, mobilization_amount, weekly_limit, week_key, ts),
+            )
+            await db.commit()
+
+    async def apply_country_multipliers(self, country: str, budget_pct: float = 0.0, life_pct: float = 0.0, risk_delta: int = 0) -> tuple[int, int, int]:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("INSERT OR IGNORE INTO country_stats (country) VALUES (?)", (country,))
+            row = await (await db.execute(
+                "SELECT budget, life_level, risk_index FROM country_stats WHERE country = ?",
+                (country,),
+            )).fetchone()
+            budget = int(row[0] or 0)
+            life = int(row[1] or 0)
+            risk = int(row[2] or 0)
+            new_budget = max(0, int(round(budget * (1.0 + budget_pct))))
+            new_life = min(100, max(0, int(round(life * (1.0 + life_pct)))))
+            new_risk = min(100, max(0, risk + int(risk_delta)))
+            await db.execute(
+                "UPDATE country_stats SET budget = ?, life_level = ?, risk_index = ?, updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (new_budget, new_life, new_risk, country),
+            )
+            await db.commit()
+        return new_budget - budget, new_life - life, new_risk - risk
+
+    async def add_mobilization_log(
+        self,
+        country: str,
+        mobilization_type: str,
+        soldiers_gained: int,
+        budget_change: int,
+        life_change: int,
+        risk_change: int,
+        penalized: bool = False,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO mobilization_logs (country, mobilization_type, soldiers_gained, budget_change, life_change, risk_change, penalized) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (country, mobilization_type, soldiers_gained, budget_change, life_change, risk_change, 1 if penalized else 0),
+            )
+            await db.commit()
+
+    async def aggregate_mobilization_logs(self, from_ts: int, to_ts: int) -> list[tuple[str, int, int, int, int]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT country, SUM(soldiers_gained), SUM(budget_change), SUM(life_change), SUM(risk_change) "
+                "FROM mobilization_logs "
+                "WHERE strftime('%s', created_at) >= ? AND strftime('%s', created_at) < ? "
+                "GROUP BY country ORDER BY country ASC",
+                (int(from_ts), int(to_ts)),
+            )).fetchall()
+        return [
+            (str(r[0]), int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0))
+            for r in rows
+        ]
 
     async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
         inserted = 0
@@ -687,3 +948,98 @@ class Database:
                 (limit,),
             )).fetchall()
         return [(int(r[0]), int(r[1]), str(r[2]), int(r[3])) for r in rows]
+
+    async def due_active_research(self, now_iso: str) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                """
+                SELECT id, country_id, tech_id, name, category, duration_days, start_date, end_date, start_message_id, effects
+                FROM active_research
+                WHERE status = 'active' AND end_date <= ?
+                ORDER BY end_date ASC
+                """,
+                (now_iso,),
+            )).fetchall()
+        return [
+            {
+                "id": int(r[0]),
+                "country_id": int(r[1]),
+                "tech_id": str(r[2]),
+                "name": str(r[3]),
+                "category": str(r[4]),
+                "duration_days": int(r[5]),
+                "start_date": str(r[6]),
+                "end_date": str(r[7]),
+                "start_message_id": int(r[8]) if r[8] is not None else None,
+                "effects": str(r[9] or "{}"),
+            }
+            for r in rows
+        ]
+
+    async def complete_active_research(self, research_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE active_research SET status = 'completed' WHERE id = ?", (research_id,))
+            await db.commit()
+
+    async def cancel_active_research(self, research_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE active_research SET status = 'cancelled' WHERE id = ? AND status = 'active'",
+                (research_id,),
+            )
+            await db.commit()
+            return int(cur.rowcount or 0) > 0
+
+    async def add_country_tech(self, country_id: int, tech_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO country_tech (country_id, tech_id) VALUES (?, ?)",
+                (country_id, tech_id),
+            )
+            await db.commit()
+
+    async def add_country_unit(self, country_id: int, unit_type: str, qty: int = 1) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO country_units (country_id, unit_type, quantity) VALUES (?, ?, ?)
+                ON CONFLICT(country_id, unit_type) DO UPDATE SET quantity = quantity + excluded.quantity
+                """,
+                (country_id, unit_type, max(1, int(qty))),
+            )
+            await db.commit()
+
+    async def add_research_log(self, country_id: int, tech_id: str, action: str, details_json: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO research_logs (country_id, tech_id, action, details_json) VALUES (?, ?, ?, ?)",
+                (country_id, tech_id, action, details_json),
+            )
+            await db.commit()
+
+    async def list_research_logs(self, country_id: int, limit: int = 50) -> list[tuple[int, str, str, str]]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (await db.execute(
+                "SELECT id, tech_id, action, details_json FROM research_logs WHERE country_id = ? ORDER BY id DESC LIMIT ?",
+                (country_id, limit),
+            )).fetchall()
+        return [(int(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows]
+
+    async def country_name_by_id(self, country_id: int) -> str:
+        async with aiosqlite.connect(self.path) as db:
+            try:
+                row = await (await db.execute(
+                    "SELECT name FROM countries WHERE id = ?",
+                    (country_id,),
+                )).fetchone()
+                if row:
+                    return str(row[0])
+            except aiosqlite.OperationalError:
+                pass
+            rows = await (await db.execute(
+                "SELECT country FROM country_stats ORDER BY country"
+            )).fetchall()
+        idx = max(0, country_id - 1)
+        if idx < len(rows):
+            return str(rows[idx][0])
+        return f"Country#{country_id}"
