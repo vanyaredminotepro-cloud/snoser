@@ -68,9 +68,37 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    async def _send_to_target_channel(
+        self,
+        text: str,
+        *,
+        parse_mode: str = "html",
+        formatting_entities: list | None = None,
+        reply_to: int | None = None,
+    ) -> bool:
+        if not self.user_client:
+            logger.warning("Target channel publish skipped: user session is not connected yet.")
+            return False
+        if formatting_entities is not None:
+            await self.user_client.send_message(
+                config.target_channel,
+                text,
+                formatting_entities=formatting_entities,
+                reply_to=reply_to,
+            )
+        else:
+            await self.user_client.send_message(
+                config.target_channel,
+                text,
+                parse_mode=parse_mode,
+                reply_to=reply_to,
+            )
+        return True
+
     async def load_dynamic_config(self) -> None:
         raw_tags = await self.db.get_state("cfg:country_hashtags", "")
         raw_sources = await self.db.get_state("cfg:source_channels", "")
+        raw_proxy = await self.db.get_state("cfg:proxy", "")
         try:
             if raw_tags:
                 loaded_tags = json.loads(raw_tags)
@@ -90,6 +118,14 @@ class NewsService:
                             config.source_channels[key] = value
         except Exception:
             logger.exception("Failed to load dynamic source-channels config")
+
+        try:
+            if raw_proxy:
+                loaded_proxy = json.loads(raw_proxy)
+                if isinstance(loaded_proxy, dict):
+                    config.proxy = loaded_proxy
+        except Exception:
+            logger.exception("Failed to load dynamic proxy config")
 
     @staticmethod
     def _post_queue_key(post: IncomingPost) -> str:
@@ -654,10 +690,7 @@ class NewsService:
                 f"Жизнь: {_fmt(life_ch)} | Риск: {_fmt(risk_ch)}"
             )
         summary = "\n".join(lines)
-        if self.user_client:
-            await self.user_client.send_message(config.target_channel, summary, parse_mode="html")
-        else:
-            await self.bot.send_message(config.target_channel, summary, parse_mode="HTML")
+        await self._send_to_target_channel(summary, parse_mode="html")
         await self.db.set_state(state_key, "1")
 
     async def publish_weekly_country_stats_if_due(self) -> None:
@@ -712,10 +745,7 @@ class NewsService:
                 f"<tg-emoji emoji-id=\"{warn_id}\"></tg-emoji> Жизнь: <b>{life}</b> ({_delta(life, old.get('life'))})"
             )
         text = "\n".join(lines)
-        if self.user_client:
-            await self.user_client.send_message(config.target_channel, text, parse_mode="html")
-        else:
-            await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+        await self._send_to_target_channel(text, parse_mode="html")
         await self.db.set_state(sent_key, "1")
 
     async def render_country_stats_card(self, country: str) -> str:
@@ -860,11 +890,9 @@ class NewsService:
 
         message = "<blockquote>" + "\n".join(lines) + "\n\n#RP #ИтогиМесяца</blockquote>"
         try:
-            if self.user_client:
-                await self.user_client.send_message(config.target_channel, message, parse_mode="html")
-            else:
-                await self.bot.send_message(config.target_channel, message, parse_mode="HTML")
-            await self.db.set_state(sent_key, "1")
+            sent = await self._send_to_target_channel(message, parse_mode="html")
+            if sent:
+                await self.db.set_state(sent_key, "1")
         except Exception:
             logger.exception("Failed to publish monthly digest")
 
@@ -1140,10 +1168,7 @@ class NewsService:
                 "Бонус: +3000 к бюджету и +1 к уровню жизни."
                 "</blockquote>"
             )
-            if self.user_client:
-                await self.user_client.send_message(config.target_channel, text, parse_mode="html")
-            else:
-                await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+            await self._send_to_target_channel(text, parse_mode="html")
         await self.process_completed_research()
 
     async def process_completed_research(self) -> None:
@@ -1206,20 +1231,11 @@ class NewsService:
                 f"<b>Эффекты:</b> {escape(json.dumps(effects, ensure_ascii=False))}"
             )
             reply_to = item.get("start_message_id")
-            if self.user_client:
-                await self.user_client.send_message(
-                    config.target_channel,
-                    text,
-                    parse_mode="html",
-                    reply_to=reply_to if reply_to else None,
-                )
-            else:
-                await self.bot.send_message(
-                    config.target_channel,
-                    text,
-                    parse_mode="HTML",
-                    reply_to_message_id=reply_to if reply_to else None,
-                )
+            await self._send_to_target_channel(
+                text,
+                parse_mode="html",
+                reply_to=reply_to if reply_to else None,
+            )
 
     async def rss_worker(self) -> None:
         if not config.rss_feeds:
@@ -1384,16 +1400,15 @@ class NewsService:
             if self.user_client:
                 if html_mode:
                     await self._send_with_retry(
-                        lambda: self.user_client.send_message(config.target_channel, formatted, parse_mode="html")
+                        lambda: self._send_to_target_channel(formatted, parse_mode="html")
                     )
                 else:
                     await self._send_with_retry(
-                        lambda: self.user_client.send_message(config.target_channel, formatted, formatting_entities=entities or [])
+                        lambda: self._send_to_target_channel(formatted, formatting_entities=entities or [])
                     )
             else:
-                await self._send_with_retry(
-                    lambda: self.bot.send_message(chat_id=config.target_channel, text=formatted, parse_mode="HTML" if html_mode else None)
-                )
+                logger.warning("Skipping publish %s/%s until user session connects.", post.source_channel, post.message_id)
+                return False
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)
             await self._increment_daily_count()
             await self.db.increment_news_quality(post.source_country, 1 if auto_passed else 0, 1)
@@ -1413,20 +1428,8 @@ class NewsService:
                 await self._send_with_retry(
                     lambda: self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
                 )
-            elif post.media_type == "photo" and post.media_file_id:
-                await self._send_with_retry(
-                    lambda: self.bot.send_photo(config.target_channel, post.media_file_id, caption=caption[:1024])
-                )
-            elif post.media_type == "video" and post.media_file_id:
-                await self._send_with_retry(
-                    lambda: self.bot.send_video(config.target_channel, post.media_file_id, caption=caption[:1024])
-                )
-            elif post.media_type == "animation" and post.media_file_id:
-                await self._send_with_retry(
-                    lambda: self.bot.send_animation(config.target_channel, post.media_file_id, caption=caption[:1024])
-                )
             else:
-                await self.publish_and_mark(post, caption, None, hash_value, auto_passed=auto_passed)
+                logger.warning("Skipping media publish %s/%s until user session connects.", post.source_channel, post.message_id)
                 return
 
             await self.db.mark_processed(post.source_channel, post.source_country, post.message_id, hash_value)

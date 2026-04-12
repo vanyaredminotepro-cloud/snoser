@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 from typing import Iterable, Optional
@@ -76,6 +77,29 @@ def _optional_env_float(*names: str) -> Optional[float]:
         raise RuntimeError(f"Environment variable {names_str} must be a float") from exc
 
 
+def _optional_env_json(*names: str) -> Optional[dict]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must contain valid JSON object") from exc
+    if not isinstance(payload, dict):
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must contain JSON object")
+    return payload
+
+
+def _optional_env_list(*names: str) -> list[str]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return []
+    chunks = [part.strip() for part in raw.replace("\n", ",").split(",")]
+    return [c for c in chunks if c]
+
+
 @dataclass(slots=True)
 class Config:
     api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
@@ -103,7 +127,24 @@ class Config:
     port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
     healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
     web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
-
+    webhook_port: int = field(default_factory=lambda: _optional_env_int("WEBHOOK_PORT") or 8090)
+    bot_webhook_secret: str = field(default_factory=lambda: _first_present_env("BOT_WEBHOOK_SECRET") or "dev-secret")
+    tg_api_host: str = field(default_factory=lambda: _first_present_env("TG_API_HOST") or "")
+    tg_api_port: int = field(default_factory=lambda: _optional_env_int("TG_API_PORT") or 443)
+    proxy: dict = field(
+        default_factory=lambda: _optional_env_json("TG_PROXY_JSON")
+        or {}
+    )
+    proxy_fallback_links: list[str] = field(
+        default_factory=lambda: _optional_env_list("TG_PROXY_LINKS")
+        or [
+            "https://t.me/proxy?server=65.109.213.227&port=65535&secret=EERighJJvXrFGRMCIMJdCQRueWVrdGFuZXQuY29tZmFyYWthdi5jb212YW4ubmFqdmEuY29tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "https://t.me/proxy?server=65.109.210.202&port=8443&secret=EERighJJvXrFGRMCIMJdCQRueWVrdGFuZXQuY29tZmFyYWthdi5jb212YW4ubmFqdmEuY29tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "https://t.me/proxy?server=tggo.store&port=443&secret=7uzWmAwONp7D1ujd83Bwkr50Z2dvLnN0b3Jl",
+            "https://t.me/proxy?server=tg.proxywing.net&port=443&secret=dd398e9112420ca2ad72bac8bfd851ff42",
+            "https://t.me/proxy?server=exact.begoodtunnel.su&port=443&secret=eed802c58b0133cc8db3c6880bab5308c165786163742e6265676f6f6474756e6e656c2e7375",
+        ]
+    )
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
     antiflood_window: int = 10

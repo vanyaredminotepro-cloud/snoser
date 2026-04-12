@@ -3,28 +3,28 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, render_template, request
 
 DB_PATH = os.environ.get("DB_PATH", "app/storage/bot_data.sqlite3")
 API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
+BOT_WEBHOOK_URL = os.environ.get("BOT_WEBHOOK_URL", "http://127.0.0.1:8090/webhook/resource/claim").strip()
+BOT_WEBHOOK_SECRET = os.environ.get("BOT_WEBHOOK_SECRET", "dev-secret").strip()
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT_DIR / "web" / "data"
+RESOURCES_PATH = DATA_DIR / "resources.json"
+TERRITORIES_PATH = DATA_DIR / "territories.json"
 
 TECH_TREE: dict[str, dict[str, Any]] = {
     "drone_recon": {"name": "🛸 Разведывательный беспилотник", "category": "drones", "description": "Маленький дрон для разведки местности", "duration": 1, "cost": 3000, "requirements": {}, "effects": {"unlock_unit": "recon_drone"}},
     "drone_strike": {"name": "💥 Ударный беспилотник", "category": "drones", "description": "Боевой дрон с возможностью точечных ударов", "duration": 2, "cost": 8000, "requirements": {"tech": ["drone_recon"]}, "effects": {"unlock_unit": "strike_drone"}},
     "rocket_short": {"name": "🎯 Тактическая ракета (малая дальность)", "category": "rockets", "description": "Ракета для ударов по прифронтовым целям", "duration": 2, "cost": 10000, "requirements": {}, "effects": {"unlock_unit": "short_rocket"}},
-    "rocket_medium": {"name": "💀 Баллистическая ракета (средняя дальность)", "category": "rockets", "description": "Стратегическое оружие для ударов в глубине территории", "duration": 4, "cost": 25000, "requirements": {"tech": ["rocket_short"], "factories": 2}, "effects": {"unlock_unit": "medium_rocket"}},
-    "air_recon": {"name": "✈️ Лёгкий разведывательный самолёт", "category": "aviation", "description": "Винтовой самолёт для разведки", "duration": 2, "cost": 6000, "requirements": {}, "effects": {"unlock_unit": "recon_plane"}},
-    "air_drone_carrier": {"name": "🚀 Носитель беспилотников", "category": "aviation", "description": "Самолёт для запуска и управления дронами", "duration": 3, "cost": 15000, "requirements": {"tech": ["air_recon", "drone_strike"]}, "effects": {"unlock_unit": "drone_carrier"}},
-    "boat_patrol": {"name": "🚤 Патрульный катер", "category": "navy", "description": "Быстроходный катер для речных и прибрежных операций", "duration": 2, "cost": 5000, "requirements": {}, "effects": {"unlock_unit": "patrol_boat"}},
-    "boat_missile": {"name": "⚡ Ракетный катер", "category": "navy", "description": "Катер с пусковыми установками для тактических ракет", "duration": 3, "cost": 12000, "requirements": {"tech": ["boat_patrol", "rocket_short"]}, "effects": {"unlock_unit": "missile_boat"}},
-    "landing_craft": {"name": "⛴️ Десантный катер", "category": "navy", "description": "Катер для высадки лёгкой техники", "duration": 2, "cost": 8000, "requirements": {"tech": ["boat_patrol"]}, "effects": {"unlock_unit": "landing_craft"}},
-    "armor_light": {"name": "🛡️ Лёгкий бронеавтомобиль", "category": "armor", "description": "Бронированная машина для разведки и патрулирования", "duration": 2, "cost": 7000, "requirements": {}, "effects": {"unlock_unit": "light_armor"}},
-    "tech_radar": {"name": "📡 Современная радиолокация", "category": "technology", "description": "Улучшенная система обнаружения целей", "duration": 3, "cost": 12000, "requirements": {"tech": ["drone_recon"]}, "effects": {"army_bonus": 10}},
-    "tech_cyber": {"name": "🛡️ Киберзащита", "category": "technology", "description": "Защита от информационных атак и шпионажа", "duration": 3, "cost": 10000, "requirements": {}, "effects": {"risk_reduction": 5}},
-    "tech_factory": {"name": "🏭 Военное производство", "category": "technology", "description": "Ускоренное строительство военных заводов", "duration": 4, "cost": 20000, "requirements": {"factories": 1}, "effects": {"factory_speed": 25}},
 }
 
 
@@ -38,6 +38,45 @@ def _authorized() -> bool:
     if not API_TOKEN:
         return True
     return request.headers.get("X-API-Key", "").strip() == API_TOKEN
+
+
+def _load_json(path: Path, fallback: dict) -> dict:
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return fallback
+
+
+def _save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _forward_claim_to_bot(payload: dict) -> tuple[int, dict]:
+    req = urllib.request.Request(
+        BOT_WEBHOOK_URL,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Secret": BOT_WEBHOOK_SECRET,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            body = json.loads(resp.read().decode("utf-8") or "{}")
+            return int(resp.status), body
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="ignore")
+        try:
+            data = json.loads(raw or "{}")
+        except Exception:
+            data = {"error": raw or "webhook error"}
+        return int(exc.code), data
+    except Exception as exc:
+        return 502, {"error": f"webhook unreachable: {exc}"}
 
 
 def ensure_schema(path: str) -> None:
@@ -63,6 +102,66 @@ def create_app(db_path: str | None = None) -> Flask:
             rows = conn.execute("SELECT country, army, budget, citizens, life_level, risk_index, war_status FROM country_stats ORDER BY country").fetchall()
         return jsonify([dict(r) for r in rows])
 
+    @app.get("/api/resources")
+    def api_resources():
+        return jsonify(_load_json(RESOURCES_PATH, {"points": []}))
+
+    @app.get("/api/territories")
+    def api_territories():
+        return jsonify(_load_json(TERRITORIES_PATH, {"regions": []}))
+
+    @app.post("/api/admin/resource")
+    def api_admin_resource():
+        if not _authorized():
+            return jsonify({"error": "Unauthorized"}), 401
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action") or "update")
+        point_id = str(payload.get("id") or "").strip()
+        resources = _load_json(RESOURCES_PATH, {"points": []})
+        points = resources.get("points") if isinstance(resources.get("points"), list) else []
+
+        if action == "add":
+            points.append(payload)
+        else:
+            target = next((x for x in points if str(x.get("id")) == point_id), None)
+            if target is None:
+                return jsonify({"error": "point not found"}), 404
+            target.update(payload)
+
+        resources["points"] = points
+        _save_json(RESOURCES_PATH, resources)
+        return jsonify({"success": True})
+
+    @app.post("/api/admin/territory")
+    def api_admin_territory():
+        if not _authorized():
+            return jsonify({"error": "Unauthorized"}), 401
+        payload = request.get_json(silent=True) or {}
+        region_id = str(payload.get("id") or "").strip()
+        territories = _load_json(TERRITORIES_PATH, {"regions": []})
+        regions = territories.get("regions") if isinstance(territories.get("regions"), list) else []
+        target = next((x for x in regions if str(x.get("id")) == region_id), None)
+        if target is None:
+            return jsonify({"error": "region not found"}), 404
+        target.update(payload)
+        territories["regions"] = regions
+        _save_json(TERRITORIES_PATH, territories)
+        return jsonify({"success": True})
+
+    @app.post("/api/resource/claim")
+    def api_resource_claim():
+        payload = request.get_json(silent=True) or {}
+        point_id = str(payload.get("point_id") or "").strip()
+        country = str(payload.get("country") or "").strip()
+        user_id = payload.get("user_id")
+        if not point_id or not country or user_id is None:
+            return jsonify({"error": "point_id, country, user_id are required"}), 400
+
+        status, bot_response = _forward_claim_to_bot(payload)
+        if status >= 400:
+            return jsonify({"error": "bot webhook failed", "details": bot_response}), status
+        return jsonify({"success": True, "result": bot_response})
+
     @app.get("/api/tech_tree")
     def api_tech_tree():
         country = str(request.args.get("country") or "").strip()
@@ -70,15 +169,12 @@ def create_app(db_path: str | None = None) -> Flask:
             return jsonify(TECH_TREE)
         with _db(app.config["DB_PATH"]) as conn:
             unlocked = {r[0] for r in conn.execute("SELECT tech_id FROM country_tech WHERE country = ?", (country,)).fetchall()}
-            row = conn.execute("SELECT factories_count FROM military_factories WHERE country = ?", (country,)).fetchone()
-        factories = int(row[0]) if row else 0
         out: dict[str, dict[str, Any]] = {}
         for tech_id, tech in TECH_TREE.items():
             req = tech.get("requirements", {})
             req_tech = list(req.get("tech", []))
-            req_fac = int(req.get("factories", 0))
             missing = [t for t in req_tech if t not in unlocked]
-            out[tech_id] = {**tech, "status": {"unlocked": tech_id in unlocked, "can_start": not missing and factories >= req_fac, "missing_tech": missing, "missing_factories": max(0, req_fac - factories)}}
+            out[tech_id] = {**tech, "status": {"unlocked": tech_id in unlocked, "can_start": not missing, "missing_tech": missing}}
         return jsonify(out)
 
     @app.get("/api/research/active")
@@ -107,9 +203,6 @@ def create_app(db_path: str | None = None) -> Flask:
             budget = int(row[0])
             if budget < int(tech["cost"]):
                 return jsonify({"error": "Not enough budget"}), 400
-            existing = conn.execute("SELECT 1 FROM active_research WHERE country = ? AND tech_id = ? AND status = 'active'", (country, tech_id)).fetchone()
-            if existing:
-                return jsonify({"error": "Research already active"}), 400
 
             start_dt = datetime.now(timezone.utc)
             end_dt = start_dt + timedelta(days=int(tech["duration"]))

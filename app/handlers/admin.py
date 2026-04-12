@@ -35,6 +35,7 @@ class AdminState(StatesGroup):
     waiting_user_manage_target = State()
     waiting_user_ban_reason = State()
     waiting_mobilization_amount = State()
+    waiting_proxy_update = State()
 
 
 def _extract_media(message: Message) -> tuple[str | None, str | None]:
@@ -187,6 +188,7 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Список банов", callback_data="admin:list_bans")],
             [InlineKeyboardButton(text="HTML исследование (beta)", callback_data="admin:html_probe")],
             [InlineKeyboardButton(text="Emoji reload", callback_data="admin:emoji_reload")],
+            [InlineKeyboardButton(text="Прокси Telethon", callback_data="admin:proxy")],
         ]
     )
 
@@ -382,6 +384,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
         elif action == "emoji_reload":
             count = await service.refresh_emoji_packs()
             await callback.message.answer(f"Emoji packs reloaded: {count}")
+        elif action == "proxy":
+            await state.set_state(AdminState.waiting_proxy_update)
+            await callback.message.answer(
+                "Отправьте JSON прокси. Пример:\n"
+                '{"proxy_type":"socks5","addr":"127.0.0.1","port":9050,"username":null,"password":null}'
+            )
         elif action == "unflood_user":
             await state.set_state(AdminState.waiting_unflood_user)
             await callback.message.answer("Введите user_id для снятия антифлуд-блокировки.")
@@ -440,6 +448,35 @@ def bind_admin_handlers(service: NewsService) -> Router:
         config.source_channels[org] = source
         await service.db.set_state("cfg:source_channels", json.dumps(config.source_channels, ensure_ascii=False))
         await message.answer(f"Источник обновлён: {org} -> {source}")
+        await state.clear()
+
+    @router.message(AdminState.waiting_proxy_update)
+    async def proxy_update_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        if not message.from_user or message.from_user.id != config.admin_id:
+            return
+        raw = (message.text or "").strip()
+        if raw.lower() in {"off", "none", "disable"}:
+            config.proxy = {}
+            await service.db.set_state("cfg:proxy", json.dumps({}, ensure_ascii=False))
+            await message.answer("Прокси отключён.")
+            await state.clear()
+            return
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            await message.answer("Некорректный JSON. Попробуйте снова.")
+            return
+        if not isinstance(payload, dict):
+            await message.answer("Ожидается JSON-объект.")
+            return
+        if payload and not {"proxy_type", "addr", "port"}.issubset(payload.keys()):
+            await message.answer("Обязательные поля: proxy_type, addr, port.")
+            return
+        config.proxy = payload
+        await service.db.set_state("cfg:proxy", json.dumps(payload, ensure_ascii=False))
+        await message.answer("Прокси обновлён и сохранён в runtime-конфиге.")
         await state.clear()
 
     @router.message(AdminState.waiting_appeal)
