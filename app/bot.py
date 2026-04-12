@@ -4,12 +4,14 @@ import json
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from aiogram import Bot, Dispatcher
 from telethon import TelegramClient, events
+from telethon.network.connection import ConnectionTcpMTProxyRandomizedIntermediate
 from telethon.tl.types import Message
 
 from app.config import config
@@ -43,15 +45,51 @@ class AppRuntime:
         self.dispatcher = Dispatcher()
         self._api_id = api_id
         self._api_hash = api_hash
+        self._proxy_rotate_index = 0
         self.userbot = self._build_userbot()
 
     def _build_userbot(self) -> TelegramClient:
+        proxy_payload = config.proxy or {}
+        if proxy_payload.get("secret"):
+            return TelegramClient(
+                config.session_name,
+                self._api_id,
+                self._api_hash,
+                connection=ConnectionTcpMTProxyRandomizedIntermediate,
+                proxy=(
+                    str(proxy_payload.get("server") or proxy_payload.get("addr")),
+                    int(proxy_payload.get("port") or 443),
+                    str(proxy_payload.get("secret")),
+                ),
+            )
         return TelegramClient(
             config.session_name,
             self._api_id,
             self._api_hash,
             proxy=config.proxy or None,
         )
+
+    @staticmethod
+    def _parse_proxy_link(link: str) -> dict | None:
+        parsed = urlparse(link.strip())
+        if parsed.netloc.lower() not in {"t.me", "telegram.me"} or parsed.path != "/proxy":
+            return None
+        params = parse_qs(parsed.query)
+        server = (params.get("server") or [""])[0].strip()
+        port_raw = (params.get("port") or [""])[0].strip()
+        secret = (params.get("secret") or [""])[0].strip()
+        if not server or not port_raw or not secret:
+            return None
+        try:
+            port = int(port_raw)
+        except ValueError:
+            return None
+        return {
+            "proxy_type": "mtproto",
+            "server": server,
+            "port": port,
+            "secret": secret,
+        }
 
     @staticmethod
     def _is_connection_reset_error(exc: Exception) -> bool:
@@ -90,6 +128,22 @@ class AppRuntime:
             return
         if isinstance(payload, dict):
             config.proxy = payload
+
+    async def _rotate_proxy(self, service: NewsService) -> None:
+        links = config.proxy_fallback_links or []
+        if not links:
+            return
+        attempts = len(links)
+        for _ in range(attempts):
+            link = links[self._proxy_rotate_index % len(links)]
+            self._proxy_rotate_index += 1
+            parsed = self._parse_proxy_link(link)
+            if not parsed:
+                continue
+            config.proxy = parsed
+            await service.db.set_state("cfg:proxy", json.dumps(parsed, ensure_ascii=False))
+            logger.warning("Switched to fallback MTProto proxy: %s:%s", parsed.get("server"), parsed.get("port"))
+            return
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
@@ -170,6 +224,7 @@ class AppRuntime:
                         await self.userbot.disconnect()
                     if self._is_connection_reset_error(exc):
                         self._drop_session_files()
+                        await self._rotate_proxy(service)
                     if attempt < len(retry_delays):
                         await asyncio.sleep(delay)
             if not connected:
