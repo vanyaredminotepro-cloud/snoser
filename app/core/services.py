@@ -71,6 +71,7 @@ class NewsService:
     async def load_dynamic_config(self) -> None:
         raw_tags = await self.db.get_state("cfg:country_hashtags", "")
         raw_sources = await self.db.get_state("cfg:source_channels", "")
+        raw_proxy = await self.db.get_state("cfg:proxy", "")
         try:
             if raw_tags:
                 loaded_tags = json.loads(raw_tags)
@@ -90,6 +91,14 @@ class NewsService:
                             config.source_channels[key] = value
         except Exception:
             logger.exception("Failed to load dynamic source-channels config")
+
+        try:
+            if raw_proxy:
+                loaded_proxy = json.loads(raw_proxy)
+                if isinstance(loaded_proxy, dict):
+                    config.proxy = loaded_proxy
+        except Exception:
+            logger.exception("Failed to load dynamic proxy config")
 
     @staticmethod
     def _post_queue_key(post: IncomingPost) -> str:

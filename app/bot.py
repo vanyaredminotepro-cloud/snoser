@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import json
 import logging
 import sys
 from pathlib import Path
@@ -39,7 +41,39 @@ class AppRuntime:
         api_id, api_hash, bot_token = config.require_runtime_credentials()
         self.bot = Bot(token=bot_token)
         self.dispatcher = Dispatcher()
-        self.userbot = TelegramClient(config.session_name, api_id, api_hash)
+        self._api_id = api_id
+        self._api_hash = api_hash
+        self.userbot = self._build_userbot()
+
+    def _build_userbot(self) -> TelegramClient:
+        return TelegramClient(
+            config.session_name,
+            self._api_id,
+            self._api_hash,
+            proxy=config.proxy or None,
+        )
+
+    @staticmethod
+    def _is_connection_reset_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "winerror 64" in text or "server closed the connection" in text or "connection closed" in text
+
+    def _drop_session_files(self) -> None:
+        for candidate in [Path(f"{config.session_name}.session"), Path(f"{config.session_name}.session-journal")]:
+            if candidate.exists():
+                candidate.unlink(missing_ok=True)
+
+    async def _refresh_proxy_config(self, service: NewsService) -> None:
+        raw_proxy = await service.db.get_state("cfg:proxy", "")
+        if not raw_proxy:
+            return
+        try:
+            payload = json.loads(raw_proxy)
+        except json.JSONDecodeError:
+            logger.warning("Invalid cfg:proxy payload, keeping current proxy config")
+            return
+        if isinstance(payload, dict):
+            config.proxy = payload
 
     async def run(self, service: NewsService) -> None:
         self.dispatcher.include_router(bind_admin_handlers(service))
@@ -63,7 +97,6 @@ class AppRuntime:
                 ", ".join(f"{country}:{handle}" for country, handle in invite_only_sources.items()),
             )
 
-        @self.userbot.on(events.NewMessage)
         async def handler(event: events.NewMessage.Event) -> None:
             text = _extract_text(event.message)
             if not text and not event.message.media:
@@ -91,23 +124,40 @@ class AppRuntime:
             await service.enqueue(post)
 
         try:
-            logger.info("Starting userbot connection...")
-            await self.userbot.connect()
-
-            if not await self.userbot.is_user_authorized():
-                logger.warning("Telethon session is not authorized. Starting interactive login flow...")
+            retry_delays = [5, 10, 20, 40, 80]
+            connected = False
+            for attempt, delay in enumerate(retry_delays, start=1):
+                await self._refresh_proxy_config(service)
+                self.userbot = self._build_userbot()
+                self.userbot.add_event_handler(handler, events.NewMessage)
                 try:
-                    await self.userbot.start()
-                except (EOFError, OSError):
-                    logger.error(
-                        "Interactive login is unavailable in this environment. Run `python -m app.main` in a terminal and complete phone/code login once."
-                    )
-                    return
-
-            if not await self.userbot.is_user_authorized():
-                logger.error("Telethon session is still not authorized after login attempt.")
+                    logger.info("Starting userbot connection (attempt %s/5)...", attempt)
+                    self.userbot.session.set_dc(2, config.tg_api_host, config.tg_api_port)
+                    await self.userbot.connect()
+                    if not await self.userbot.is_user_authorized():
+                        logger.warning("Telethon session is not authorized. Starting interactive login flow...")
+                        try:
+                            await self.userbot.start()
+                        except (EOFError, OSError):
+                            logger.error(
+                                "Interactive login is unavailable in this environment. Run `python -m app.main` in a terminal and complete phone/code login once."
+                            )
+                            return
+                    if not await self.userbot.is_user_authorized():
+                        raise RuntimeError("Telethon session is still not authorized after login attempt.")
+                    connected = True
+                    break
+                except Exception as exc:
+                    logger.warning("Userbot connection attempt failed: %s", exc)
+                    with contextlib.suppress(Exception):
+                        await self.userbot.disconnect()
+                    if self._is_connection_reset_error(exc):
+                        self._drop_session_files()
+                    if attempt < len(retry_delays):
+                        await asyncio.sleep(delay)
+            if not connected:
+                logger.error("Userbot connection failed after 5 attempts.")
                 return
-
             logger.info("Userbot authorized and connected")
             service.attach_user_client(self.userbot)
             loaded = await service.refresh_emoji_packs()

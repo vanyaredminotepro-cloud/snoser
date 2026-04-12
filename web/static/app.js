@@ -1,6 +1,27 @@
-const s={countries:[],selected:"",tree:{},active:[]};
-const api=async(u,o={})=>{const r=await fetch(u,{headers:{"Content-Type":"application/json",...(localStorage.webApiToken?{"X-API-Key":localStorage.webApiToken}:{})},...o});const j=await r.json();if(!r.ok) throw new Error(j.error||"error");return j};
-const timer=(iso)=>{let d=Math.max(0,Math.floor((new Date(iso)-Date.now())/1000));const D=Math.floor(d/86400);d%=86400;const H=Math.floor(d/3600);d%=3600;const M=Math.floor(d/60);return `${D}д ${H}ч ${M}м ${d%60}с`;};
-async function load(){s.countries=await api('/api/countries');if(!s.selected&&s.countries.length)s.selected=s.countries[0].country;document.getElementById('country').innerHTML=s.countries.map(c=>`<option value="${c.country}">${c.country}</option>`).join('');document.getElementById('country').value=s.selected;s.tree=await api(`/api/tech_tree?country=${encodeURIComponent(s.selected)}`);s.active=await api('/api/research/active');render();}
-function render(){const c=s.countries.find(x=>x.country===s.selected);document.getElementById('stats').innerHTML=c?`Армия: ${c.army}<br>Бюджет: ${c.budget}<br>Граждане: ${c.citizens}<br>Жизнь: ${c.life_level}<br>Риск: ${c.risk_index}`:'';document.getElementById('active').innerHTML=s.active.map(a=>`<div>${a.country}: ${a.name}<br><small>${timer(a.end_date)}</small></div>`).join('')||'Нет';const root=document.getElementById('tree');root.innerHTML='';const tpl=document.getElementById('techTpl');for(const [id,t] of Object.entries(s.tree)){const n=tpl.content.firstElementChild.cloneNode(true);n.querySelector('.name').textContent=t.name;n.querySelector('.desc').textContent=t.description;n.querySelector('.meta').textContent=`${t.category} • ${t.duration}д • ${t.cost}`;const status=t.status||{};const txt=status.unlocked?'Уже изучено':status.can_start?'Доступно':`Недоступно: ${(status.missing_tech||[]).join(', ')} ${status.missing_factories?`заводы +${status.missing_factories}`:''}`;n.querySelector('.status').textContent=txt;n.querySelector('.status').className='status '+(status.can_start?'ok':'warn');const b=n.querySelector('button');b.disabled=!status.can_start||status.unlocked;b.onclick=async()=>{try{await api('/api/research/start',{method:'POST',body:JSON.stringify({country:s.selected,tech_id:id})});await load()}catch(e){alert(e.message)}};root.appendChild(n)}}
-document.getElementById('country').addEventListener('change',async(e)=>{s.selected=e.target.value;await load()});setInterval(()=>{render()},1000);load();
+(async function bootstrap() {
+  const tabs = document.querySelectorAll('.tab');
+  const panes = {
+    map: document.getElementById('tab-map'),
+    research: document.getElementById('tab-research'),
+  };
+
+  tabs.forEach((btn) => btn.addEventListener('click', () => {
+    tabs.forEach((b) => b.classList.toggle('active', b === btn));
+    Object.entries(panes).forEach(([name, node]) => node.classList.toggle('active', name === btn.dataset.tab));
+  }));
+
+  const countries = await window.researchModule.load();
+  const selector = document.getElementById('country');
+  selector.innerHTML = countries.map((c) => `<option value="${c.country}">${c.country}</option>`).join('');
+  const current = countries[0] ? countries[0].country : '';
+  selector.value = current;
+  await window.mapModule.load(current);
+  window.mapModule.bind();
+
+  selector.addEventListener('change', async () => {
+    await window.researchModule.load(selector.value);
+    await window.mapModule.load(selector.value);
+  });
+
+  setInterval(() => window.researchModule.render(), 1000);
+})();

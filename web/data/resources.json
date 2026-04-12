@@ -1,0 +1,7 @@
+{
+  "points": [
+    {"id":"stone_1","name":"Каменный карьер","x":180,"y":300,"type":"камень","icon":"🪨","amount":500,"owner":"Обоссляндия","can_mine":true,"region_id":"region_1"},
+    {"id":"wood_1","name":"Северная делянка","x":360,"y":250,"type":"дерево","icon":"🌲","amount":900,"owner":"Вилония","can_mine":true,"region_id":"region_2"},
+    {"id":"cow_1","name":"Ферма КРС","x":460,"y":410,"type":"корова","icon":"🐄","amount":80,"owner":"Обоссляндия","can_mine":true,"region_id":"region_1"}
+  ]
+}

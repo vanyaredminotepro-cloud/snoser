@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import sys
 from contextlib import suppress
@@ -13,18 +14,125 @@ from app.core.logging_setup import setup_logging
 from app.core.services import NewsService
 from app.storage.database import Database
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+RESOURCES_PATH = ROOT_DIR / "web" / "data" / "resources.json"
+TERRITORIES_PATH = ROOT_DIR / "web" / "data" / "territories.json"
 
-async def _healthcheck_server(port: int) -> asyncio.AbstractServer:
+
+def _load_json(path: Path, fallback: dict) -> dict:
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return fallback
+
+
+def _save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _apply_resource_claim(payload: dict) -> dict:
+    point_id = str(payload.get("point_id") or "").strip()
+    country = str(payload.get("country") or "").strip()
+    frame_ok = bool(payload.get("frame_ok", True))
+    if not point_id or not country:
+        return {"error": "point_id and country are required", "status": 400}
+    if not frame_ok:
+        return {"error": "frame validation failed", "status": 409}
+
+    resources = _load_json(RESOURCES_PATH, {"points": []})
+    territories = _load_json(TERRITORIES_PATH, {"regions": []})
+
+    points = resources.get("points") if isinstance(resources.get("points"), list) else []
+    regions = territories.get("regions") if isinstance(territories.get("regions"), list) else []
+
+    target_point = next((p for p in points if str(p.get("id")) == point_id), None)
+    if target_point is None:
+        return {"error": "point not found", "status": 404}
+
+    current_amount = int(target_point.get("amount", 0))
+    mine_amount = min(10, max(0, current_amount))
+    target_point["amount"] = max(0, current_amount - mine_amount)
+    target_point["owner"] = country
+
+    region_id = str(target_point.get("region_id") or "").strip()
+    if region_id:
+        for region in regions:
+            if str(region.get("id")) == region_id:
+                region["owner"] = country
+                break
+
+    _save_json(RESOURCES_PATH, resources)
+    _save_json(TERRITORIES_PATH, territories)
+    return {
+        "status": 200,
+        "result": {
+            "point_id": point_id,
+            "owner": country,
+            "delta": mine_amount,
+            "amount": target_point["amount"],
+            "region_id": region_id,
+        },
+    }
+
+
+async def _control_server(port: int, db: Database) -> asyncio.AbstractServer:
     async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        with suppress(Exception):
-            await reader.read(1024)
-        payload = b"ok"
+        body_bytes = b""
+        status = 200
+        payload: dict | str = {"ok": True}
+
+        try:
+            raw = await reader.read(1024 * 1024)
+            header_blob, _, body_bytes = raw.partition(b"\r\n\r\n")
+            lines = header_blob.decode("utf-8", errors="ignore").split("\r\n")
+            request_line = lines[0] if lines else ""
+            method, path, _ = (request_line.split(" ") + ["", ""])[:3]
+            headers = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+
+            if method == "GET" and path == "/health":
+                payload = "ok"
+            elif method == "POST" and path == "/webhook/resource/claim":
+                secret = headers.get("x-webhook-secret", "")
+                if config.bot_webhook_secret and secret != config.bot_webhook_secret:
+                    status = 401
+                    payload = {"error": "invalid secret"}
+                else:
+                    event = json.loads(body_bytes.decode("utf-8") or "{}")
+                    result = _apply_resource_claim(event)
+                    status = int(result.get("status", 200))
+                    payload = result.get("result") or {"error": result.get("error", "unknown")}
+                    await db.set_state("webhook:last_resource_claim", json.dumps(event, ensure_ascii=False))
+                    count = int(await db.get_state("metric:webhook_resource_claim_total", "0") or "0")
+                    await db.set_state("metric:webhook_resource_claim_total", str(count + 1))
+            else:
+                status = 404
+                payload = {"error": "not found"}
+        except Exception as exc:
+            status = 500
+            payload = {"error": str(exc)}
+
+        if isinstance(payload, str):
+            body = payload.encode("utf-8")
+            content_type = b"text/plain; charset=utf-8"
+        else:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            content_type = b"application/json; charset=utf-8"
+
         response = (
-            b"HTTP/1.1 200 OK\r\n"
-            b"Content-Type: text/plain; charset=utf-8\r\n"
-            b"Content-Length: 2\r\n"
-            b"Connection: close\r\n\r\n"
-            + payload
+            f"HTTP/1.1 {status} {'OK' if status < 400 else 'ERROR'}\r\n".encode("utf-8")
+            + b"Content-Type: "
+            + content_type
+            + b"\r\nContent-Length: "
+            + str(len(body)).encode("utf-8")
+            + b"\r\nConnection: close\r\n\r\n"
+            + body
         )
         writer.write(response)
         with suppress(Exception):
@@ -41,13 +149,15 @@ async def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Booting Telegram RP news bot...")
     config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    health_server: asyncio.AbstractServer | None = None
-    if config.healthcheck_enabled:
-        health_server = await _healthcheck_server(config.port)
-        logger.info("Healthcheck endpoint enabled on 0.0.0.0:%s", config.port)
 
     db = Database(str(config.sqlite_path))
     await db.init()
+
+    control_server: asyncio.AbstractServer | None = None
+    if config.healthcheck_enabled:
+        control_server = await _control_server(config.webhook_port, db)
+        logger.info("Control server enabled on 0.0.0.0:%s", config.webhook_port)
+
     seeded = await db.seed_country_leaders(config.manual_country_authors)
     logger.info("Country leaders seeded from config: %s", seeded)
     stats_seeded = await db.seed_country_stats(config.initial_country_stats)
@@ -67,10 +177,10 @@ async def main() -> None:
     try:
         await runtime.run(service)
     finally:
-        if health_server is not None:
-            health_server.close()
-            await health_server.wait_closed()
-            logger.info("Healthcheck endpoint stopped")
+        if control_server is not None:
+            control_server.close()
+            await control_server.wait_closed()
+            logger.info("Control server stopped")
 
 
 def run() -> None:

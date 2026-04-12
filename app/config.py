@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 from typing import Iterable, Optional
@@ -76,6 +77,21 @@ def _optional_env_float(*names: str) -> Optional[float]:
         raise RuntimeError(f"Environment variable {names_str} must be a float") from exc
 
 
+def _optional_env_json(*names: str) -> Optional[dict]:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must contain valid JSON object") from exc
+    if not isinstance(payload, dict):
+        names_str = ", ".join(names)
+        raise RuntimeError(f"Environment variable {names_str} must contain JSON object")
+    return payload
+
+
 @dataclass(slots=True)
 class Config:
     api_id: Optional[int] = field(default_factory=lambda: _optional_env_int("TG_API_ID", "API_ID"))
@@ -103,7 +119,20 @@ class Config:
     port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
     healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
     web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
-
+    webhook_port: int = field(default_factory=lambda: _optional_env_int("WEBHOOK_PORT") or 8090)
+    bot_webhook_secret: str = field(default_factory=lambda: _first_present_env("BOT_WEBHOOK_SECRET") or "dev-secret")
+    tg_api_host: str = field(default_factory=lambda: _first_present_env("TG_API_HOST") or "web.telegram.org")
+    tg_api_port: int = field(default_factory=lambda: _optional_env_int("TG_API_PORT") or 443)
+    proxy: dict = field(
+        default_factory=lambda: _optional_env_json("TG_PROXY_JSON")
+        or {
+            "proxy_type": "socks5",
+            "addr": "127.0.0.1",
+            "port": 9050,
+            "username": None,
+            "password": None,
+        }
+    )
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
     antiflood_window: int = 10
