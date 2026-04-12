@@ -457,6 +457,12 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not message.from_user or message.from_user.id != config.admin_id:
             return
         raw = (message.text or "").strip()
+        if raw.lower() in {"off", "none", "disable"}:
+            config.proxy = {}
+            await service.db.set_state("cfg:proxy", json.dumps({}, ensure_ascii=False))
+            await message.answer("Прокси отключён.")
+            await state.clear()
+            return
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
@@ -465,8 +471,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not isinstance(payload, dict):
             await message.answer("Ожидается JSON-объект.")
             return
-        required = {"proxy_type", "addr", "port"}
-        if not required.issubset(payload.keys()):
+        if payload and not {"proxy_type", "addr", "port"}.issubset(payload.keys()):
             await message.answer("Обязательные поля: proxy_type, addr, port.")
             return
         config.proxy = payload

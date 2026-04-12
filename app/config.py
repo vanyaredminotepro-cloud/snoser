@@ -125,13 +125,7 @@ class Config:
     tg_api_port: int = field(default_factory=lambda: _optional_env_int("TG_API_PORT") or 443)
     proxy: dict = field(
         default_factory=lambda: _optional_env_json("TG_PROXY_JSON")
-        or {
-            "proxy_type": "socks5",
-            "addr": "127.0.0.1",
-            "port": 9050,
-            "username": None,
-            "password": None,
-        }
+        or {}
     )
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
