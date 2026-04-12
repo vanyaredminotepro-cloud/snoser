@@ -56,7 +56,23 @@ class AppRuntime:
     @staticmethod
     def _is_connection_reset_error(exc: Exception) -> bool:
         text = str(exc).lower()
-        return "winerror 64" in text or "server closed the connection" in text or "connection closed" in text
+        return (
+            "winerror 64" in text
+            or "server closed the connection" in text
+            or "connection closed" in text
+            or "expected bytes" in text
+            or "auth_key generation timeout" in text
+        )
+
+    @staticmethod
+    def _should_override_dc() -> bool:
+        host = (config.tg_api_host or "").strip().lower()
+        if not host:
+            return False
+        if host == "web.telegram.org":
+            logger.warning("Skipping TG_API_HOST=web.telegram.org override: this host is not valid for MTProto userbot.")
+            return False
+        return True
 
     def _drop_session_files(self) -> None:
         for candidate in [Path(f"{config.session_name}.session"), Path(f"{config.session_name}.session-journal")]:
@@ -132,7 +148,8 @@ class AppRuntime:
                 self.userbot.add_event_handler(handler, events.NewMessage)
                 try:
                     logger.info("Starting userbot connection (attempt %s/5)...", attempt)
-                    self.userbot.session.set_dc(2, config.tg_api_host, config.tg_api_port)
+                    if self._should_override_dc():
+                        self.userbot.session.set_dc(2, config.tg_api_host, config.tg_api_port)
                     await self.userbot.connect()
                     if not await self.userbot.is_user_authorized():
                         logger.warning("Telethon session is not authorized. Starting interactive login flow...")

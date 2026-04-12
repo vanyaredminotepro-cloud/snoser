@@ -121,7 +121,7 @@ class Config:
     web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
     webhook_port: int = field(default_factory=lambda: _optional_env_int("WEBHOOK_PORT") or 8090)
     bot_webhook_secret: str = field(default_factory=lambda: _first_present_env("BOT_WEBHOOK_SECRET") or "dev-secret")
-    tg_api_host: str = field(default_factory=lambda: _first_present_env("TG_API_HOST") or "web.telegram.org")
+    tg_api_host: str = field(default_factory=lambda: _first_present_env("TG_API_HOST") or "")
     tg_api_port: int = field(default_factory=lambda: _optional_env_int("TG_API_PORT") or 443)
     proxy: dict = field(
         default_factory=lambda: _optional_env_json("TG_PROXY_JSON")
