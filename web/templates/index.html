@@ -3,19 +3,83 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Исследования</title>
+  <title>RP Карта + Исследования</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}"/>
 </head>
 <body>
-  <header><h1>🔬 Исследования</h1></header>
-  <main>
+  <header class="topbar">
+    <h1>🛰️ RP-экосистема Обоссляндия</h1>
+    <div class="tabs">
+      <button id="tab-map" class="active">Карта ресурсов</button>
+      <button id="tab-research">Исследования</button>
+    </div>
+    <label>Страна</label>
+    <select id="country"></select>
+    <button id="themeToggle" title="Переключить тему">🌙/☀️</button>
+  </header>
+
+  <main id="map-view" class="layout-map">
+    <section class="card map-card">
+      <div class="map-stack" id="mapStack">
+        <!-- Нижний слой: спутниковая карта -->
+        <img class="map-layer" src="{{ url_for('static', filename='images/satellite.svg') }}" alt="Спутниковая карта"/>
+        <!-- Верхний PNG слой: границы стран -->
+        <img class="map-layer" src="{{ url_for('static', filename='images/territories.svg') }}" alt="Границы стран"/>
+        <!-- SVG overlay: кликабельные точки, полигоны, столицы -->
+        <svg id="mapSvg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="actions-row">
+        <button id="refreshMap">Обновить</button>
+        <button id="closePopup">Закрыть popup</button>
+        <button id="exportJson">Экспорт JSON</button>
+        <button id="exportCsv">Экспорт CSV</button>
+      </div>
+      <div id="pointPopup" class="popup hidden"></div>
+    </section>
+
+    <aside class="card side-card">
+      <h2>Легенда (Minecraft style)</h2>
+      <div id="legend"></div>
+      <h3>Точки ресурсов</h3>
+      <div id="resourceList"></div>
+
+      <h3>Фильтры</h3>
+      <label><input type="checkbox" id="filter-countries" checked> Страны</label>
+      <label><input type="checkbox" id="filter-resources" checked> Ресурсы</label>
+      <label><input type="checkbox" id="filter-animals" checked> Животные</label>
+      <label><input type="checkbox" id="filter-capitals" checked> Столицы</label>
+
+      <h3>Админ-режим</h3>
+      <!-- TODO: заменить на полноценную auth-модель ролей -->
+      <input id="adminPointId" placeholder="id точки"/>
+      <input id="adminPointOwner" placeholder="владелец точки"/>
+      <input id="adminPointAmount" type="number" placeholder="кол-во"/>
+      <button id="adminSavePoint">Сохранить точку</button>
+
+      <hr>
+      <input id="adminRegionId" placeholder="id территории"/>
+      <input id="adminRegionOwner" placeholder="владелец территории"/>
+      <input id="adminRegionColor" placeholder="#hex цвет"/>
+      <button id="adminSaveRegion">Сохранить территорию</button>
+
+      <hr>
+      <input id="adminNewX" type="number" placeholder="x"/>
+      <input id="adminNewY" type="number" placeholder="y"/>
+      <input id="adminNewName" placeholder="название точки"/>
+      <select id="adminNewType"></select>
+      <input id="adminNewOwner" placeholder="владелец"/>
+      <input id="adminNewRegionId" placeholder="region_id"/>
+      <input id="adminNewAmount" type="number" placeholder="кол-во"/>
+      <button id="adminAddPoint">Добавить точку</button>
+    </aside>
+  </main>
+
+  <main id="research-view" class="layout-research hidden">
     <section class="card">
-      <label>Страна</label>
-      <select id="country"></select>
       <div id="stats"></div>
     </section>
     <section class="card">
-      <h2>Активные</h2>
+      <h2>Активные исследования</h2>
       <div id="active"></div>
     </section>
     <section class="card full">
@@ -23,6 +87,7 @@
       <div id="tree" class="grid"></div>
     </section>
   </main>
+
   <template id="techTpl">
     <article class="tech">
       <h3 class="name"></h3>
@@ -32,6 +97,10 @@
       <button>Исследовать</button>
     </article>
   </template>
+
+  <script src="{{ url_for('static', filename='js/research.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/map.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

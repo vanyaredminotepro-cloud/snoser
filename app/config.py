@@ -103,6 +103,8 @@ class Config:
     port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
     healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
     web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
+    webhook_port: int = field(default_factory=lambda: _optional_env_int("WEBHOOK_PORT") or 8081)
+    webhook_secret: str = field(default_factory=lambda: _first_present_env("BOT_WEBHOOK_SECRET") or "")
 
     antiflood_window_sec: int = 1
     antiflood_max_messages: int = 5
