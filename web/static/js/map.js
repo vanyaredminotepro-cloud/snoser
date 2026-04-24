@@ -7,6 +7,11 @@ window.mapModule = (() => {
     filters: { territories: true, resources: true, animals: true, capitals: true },
     viewBox: '0 0 1200 800',
     bgImage: null,
+    editor: {
+      enabled: false,
+      selectedRegionId: '',
+      draggingHandleIdx: -1,
+    },
   };
 
   const animalTypes = new Set(['корова', 'свинья', 'курица', 'рыба', 'олень', 'заяц', 'обезьяна']);
@@ -57,11 +62,46 @@ window.mapModule = (() => {
           const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
           poly.setAttribute('points', points.map((p) => `${p.x},${p.y}`).join(' '));
           poly.setAttribute('fill', r.color || '#60a5fa');
-          poly.setAttribute('fill-opacity', '0.25');
+          poly.setAttribute('fill-opacity', state.editor.selectedRegionId === r.id ? '0.45' : '0.25');
           poly.setAttribute('stroke', '#111827');
-          poly.setAttribute('stroke-width', '2');
+          poly.setAttribute('stroke-width', state.editor.selectedRegionId === r.id ? '3' : '2');
+          if (state.editor.enabled) {
+            poly.style.cursor = 'pointer';
+            poly.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              state.editor.selectedRegionId = r.id;
+              draw();
+            });
+          }
           svg.appendChild(poly);
         });
+    }
+
+    if (state.editor.enabled && state.editor.selectedRegionId) {
+      const selected = state.regions.find((r) => r.id === state.editor.selectedRegionId);
+      const points = Array.isArray(selected?.polygon) ? selected.polygon : [];
+      points.forEach((p, idx) => {
+        const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        handle.setAttribute('cx', p.x);
+        handle.setAttribute('cy', p.y);
+        handle.setAttribute('r', '7');
+        handle.setAttribute('fill', '#f59e0b');
+        handle.setAttribute('stroke', '#111827');
+        handle.setAttribute('stroke-width', '2');
+        handle.style.cursor = 'move';
+        handle.addEventListener('mousedown', (ev) => {
+          ev.stopPropagation();
+          state.editor.draggingHandleIdx = idx;
+        });
+        handle.addEventListener('dblclick', (ev) => {
+          ev.stopPropagation();
+          if (points.length > 3) {
+            points.splice(idx, 1);
+            draw();
+          }
+        });
+        svg.appendChild(handle);
+      });
     }
 
     if (state.filters.capitals) {
@@ -150,6 +190,55 @@ window.mapModule = (() => {
   }
 
   function bind() {
+    const svg = document.getElementById('map-overlay');
+    const mapWrap = document.getElementById('map-wrap');
+
+    svg?.addEventListener('mousemove', (ev) => {
+      if (!state.editor.enabled || state.editor.draggingHandleIdx < 0 || !state.editor.selectedRegionId) return;
+      const selected = state.regions.find((r) => r.id === state.editor.selectedRegionId);
+      if (!selected || !Array.isArray(selected.polygon)) return;
+      const pt = selected.polygon[state.editor.draggingHandleIdx];
+      if (!pt) return;
+      pt.x = ev.offsetX;
+      pt.y = ev.offsetY;
+      draw();
+    });
+    mapWrap?.addEventListener('mouseup', () => { state.editor.draggingHandleIdx = -1; });
+    mapWrap?.addEventListener('mouseleave', () => { state.editor.draggingHandleIdx = -1; });
+
+    svg?.addEventListener('click', (ev) => {
+      if (!state.editor.enabled || !state.editor.selectedRegionId || !ev.shiftKey) return;
+      const selected = state.regions.find((r) => r.id === state.editor.selectedRegionId);
+      if (!selected) return;
+      selected.polygon = Array.isArray(selected.polygon) ? selected.polygon : [];
+      selected.polygon.push({ x: ev.offsetX, y: ev.offsetY });
+      draw();
+    });
+
+    document.getElementById('poly-edit-toggle')?.addEventListener('click', () => {
+      state.editor.enabled = !state.editor.enabled;
+      state.editor.draggingHandleIdx = -1;
+      if (!state.editor.enabled) state.editor.selectedRegionId = '';
+      const saveBtn = document.getElementById('poly-save');
+      if (saveBtn) saveBtn.disabled = !state.editor.enabled;
+      const st = document.getElementById('poly-state');
+      if (st) st.textContent = state.editor.enabled ? 'Режим границ: ВКЛ' : '';
+      draw();
+    });
+
+    document.getElementById('poly-save')?.addEventListener('click', async () => {
+      if (!state.editor.selectedRegionId) return;
+      const selected = state.regions.find((r) => r.id === state.editor.selectedRegionId);
+      if (!selected) return;
+      await api('/api/admin/territory', {
+        method: 'POST',
+        body: JSON.stringify({ mode: 'territory', id: selected.id, polygon: selected.polygon }),
+      });
+      await load(state.country);
+      const st = document.getElementById('poly-state');
+      if (st) st.textContent = `Сохранено: ${selected.id}`;
+    });
+
     document.getElementById('filter-territories')?.addEventListener('change', (e) => { state.filters.territories = e.target.checked; draw(); });
     document.getElementById('filter-resources')?.addEventListener('change', (e) => { state.filters.resources = e.target.checked; draw(); });
     document.getElementById('filter-animals')?.addEventListener('change', (e) => { state.filters.animals = e.target.checked; draw(); });
