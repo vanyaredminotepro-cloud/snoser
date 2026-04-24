@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 import time
 import sys
@@ -21,6 +22,21 @@ async def _mk_service(tmp_path: Path) -> tuple[NewsService, Database]:
     await db.init()
     svc = NewsService(DummyBot(), db)
     return svc, db
+
+
+async def _seed_mob_signal(db: Database, country: str, *, age_hours: int = 1) -> None:
+    await db.set_state(
+        f"mob_signal:{country}",
+        json.dumps(
+            {
+                "country": country,
+                "channel": "oboss_news",
+                "message_id": 55,
+                "ts": int(time.time()) - age_hours * 3600,
+            },
+            ensure_ascii=False,
+        ),
+    )
 
 
 def test_mobilization_requirements_block_partial_without_factory(tmp_path: Path):
@@ -109,6 +125,7 @@ def test_day4_sync_from_recent_mobilization_news(tmp_path: Path):
         svc, db = await _mk_service(tmp_path)
         await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
         await db.set_country_war_status("Вилония", "peace")
+        await _seed_mob_signal(db, "Вилония")
         ok, _ = await svc.start_mobilization("Вилония", "conscription", 5)
         assert ok
         post = IncomingPost(
@@ -122,5 +139,35 @@ def test_day4_sync_from_recent_mobilization_news(tmp_path: Path):
         await svc._sync_mobilization_day4_from_news(post, post.text)
         raw = await db.get_state("mobplan:Вилония", "")
         assert "\"gained\": 3" in raw
+
+    asyncio.run(_run())
+
+
+def test_start_mobilization_fails_when_signal_too_old(tmp_path: Path):
+    async def _run():
+        svc, db = await _mk_service(tmp_path)
+        await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
+        await db.set_country_war_status("Вилония", "peace")
+        await _seed_mob_signal(db, "Вилония", age_hours=24 * 30)
+        ok, msg = await svc.start_mobilization("Вилония", "conscription", 5)
+        assert not ok
+        assert "23 дней" in msg
+
+    asyncio.run(_run())
+
+
+def test_force_stop_blocks_restart_in_same_week(tmp_path: Path):
+    async def _run():
+        svc, db = await _mk_service(tmp_path)
+        await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
+        await db.set_country_war_status("Вилония", "peace")
+        await _seed_mob_signal(db, "Вилония", age_hours=1)
+        ok, _ = await svc.start_mobilization("Вилония", "conscription", 5)
+        assert ok
+        stop_ok, _ = await svc.force_finish_mobilization("Вилония", "тест", 1)
+        assert stop_ok
+        ok2, msg2 = await svc.start_mobilization("Вилония", "conscription", 5)
+        assert not ok2
+        assert "Повторный запуск запрещён" in msg2
 
     asyncio.run(_run())

@@ -35,6 +35,7 @@ class AdminState(StatesGroup):
     waiting_user_manage_target = State()
     waiting_user_ban_reason = State()
     waiting_mobilization_amount = State()
+    waiting_mobilization_force_reason = State()
     waiting_proxy_update = State()
 
 
@@ -212,6 +213,8 @@ def _mobilization_types_keyboard() -> InlineKeyboardMarkup:
     rows = []
     for key, profile in config.mobilization_profiles.items():
         rows.append([InlineKeyboardButton(text=str(profile["label"]), callback_data=f"mob:type:{key}")])
+    rows.append([InlineKeyboardButton(text="🔎 Проверить критерии", callback_data="mob:criteria")])
+    rows.append([InlineKeyboardButton(text="⛔️ Принудительно завершить", callback_data="mob:force_finish")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -863,17 +866,52 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not ok:
             await message.answer(reason)
 
-    return router
-    @router.callback_query(F.data.startswith("mob:type:"))
-    async def mobilization_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    @router.callback_query(F.data == "mob:criteria")
+    async def mobilization_criteria_callback(callback: CallbackQuery) -> None:
         if not await _guard_callback(callback):
             return
-        mob_type = callback.data.split(":", maxsplit=2)[2]
+        user_countries = _user_allowed_countries(callback.from_user.id)
+        country = user_countries[0] if user_countries else "Обоссляндия"
+        status = await service.render_mobilization_status(country)
+        await callback.message.answer(status, parse_mode="HTML")
+        await callback.answer()
+
+    @router.callback_query(F.data == "mob:force_finish")
+    async def mobilization_force_finish_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
         user_countries = _user_allowed_countries(callback.from_user.id)
         if not user_countries and callback.from_user.id != config.admin_id:
             await callback.answer("Нет страны для мобилизации", show_alert=True)
             return
         country = user_countries[0] if user_countries else "Обоссляндия"
+        await state.set_state(AdminState.waiting_mobilization_force_reason)
+        await state.update_data(mob_country=country)
+        await callback.message.answer("Введите причину принудительной остановки мобилизации.")
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("mob:type:"))
+    async def mobilization_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _guard_callback(callback):
+            return
+        mob_type = callback.data.split(":", maxsplit=2)[2]
+        if mob_type not in config.mobilization_profiles:
+            await callback.answer("Неизвестный тип мобилизации", show_alert=True)
+            return
+        user_countries = _user_allowed_countries(callback.from_user.id)
+        if not user_countries and callback.from_user.id != config.admin_id:
+            await callback.answer("Нет страны для мобилизации", show_alert=True)
+            return
+        country = user_countries[0] if user_countries else "Обоссляндия"
+        criteria_ok, criteria_msg = await service.check_mobilization_news_criteria(country)
+        if not criteria_ok:
+            await callback.message.answer(
+                "Нельзя запустить мобилизацию.\n"
+                f"Причина: {criteria_msg}\n\n"
+                "Нужна подтверждающая новость (мобилизация/синонимы) по вашей стране за последние 23 дня."
+            )
+            await callback.answer()
+            return
         await state.set_state(AdminState.waiting_mobilization_amount)
         await state.update_data(mob_country=country, mob_type=mob_type)
         profile = config.mobilization_profiles.get(mob_type, {})
@@ -900,3 +938,16 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if ok:
             await message.bot.send_message(config.admin_id, f"📌 Запуск мобилизации\n{country}\n{report}")
         await state.clear()
+
+    @router.message(AdminState.waiting_mobilization_force_reason)
+    async def mobilization_force_reason_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        reason = (message.text or "").strip() or "без причины"
+        data = await state.get_data()
+        country = str(data.get("mob_country", ""))
+        ok, report = await service.force_finish_mobilization(country, reason, message.from_user.id if message.from_user else 0)
+        await message.answer(report)
+        await state.clear()
+
+    return router
