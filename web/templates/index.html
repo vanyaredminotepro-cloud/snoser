@@ -32,7 +32,7 @@
           </div>
 
           <div id="map-wrap" class="map-wrap">
-            <img src="{{ url_for('static', filename='images/satellite.svg') }}" class="layer" alt="satellite"/>
+            <img id="satellite-layer" src="{{ url_for('static', filename='images/satellite.svg') }}" class="layer" alt="satellite"/>
             <img id="territory-layer" src="{{ url_for('static', filename='images/territories.svg') }}" class="layer top" alt="territories"/>
             <svg id="map-overlay" viewBox="0 0 1200 800"></svg>
             <div id="point-popup" class="popup hidden"></div>

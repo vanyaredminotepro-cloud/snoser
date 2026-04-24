@@ -5,6 +5,8 @@ window.mapModule = (() => {
     regions: [],
     country: '',
     filters: { territories: true, resources: true, animals: true, capitals: true },
+    viewBox: '0 0 1200 800',
+    bgImage: null,
   };
 
   const animalTypes = new Set(['корова', 'свинья', 'курица', 'рыба', 'олень', 'заяц', 'обезьяна']);
@@ -42,7 +44,24 @@ window.mapModule = (() => {
   function draw() {
     const svg = document.getElementById('map-overlay');
     if (!svg) return;
+    svg.setAttribute('viewBox', state.viewBox || '0 0 1200 800');
     svg.innerHTML = '';
+
+    if (state.filters.territories) {
+      state.regions
+        .filter((r) => !state.country || r.owner === state.country)
+        .forEach((r) => {
+          const points = Array.isArray(r.polygon) ? r.polygon : [];
+          if (!points.length) return;
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          poly.setAttribute('points', points.map((p) => `${p.x},${p.y}`).join(' '));
+          poly.setAttribute('fill', r.color || '#60a5fa');
+          poly.setAttribute('fill-opacity', '0.25');
+          poly.setAttribute('stroke', '#111827');
+          poly.setAttribute('stroke-width', '2');
+          svg.appendChild(poly);
+        });
+    }
 
     if (state.filters.capitals) {
       state.regions
@@ -78,8 +97,15 @@ window.mapModule = (() => {
       t.setAttribute('x', p.x - 6);
       t.setAttribute('y', p.y + 4);
       t.textContent = p.icon || '⛏️';
+      const amount = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      amount.setAttribute('x', p.x + 12);
+      amount.setAttribute('y', p.y + 4);
+      amount.setAttribute('fill', '#f8fafc');
+      amount.setAttribute('font-size', '12');
+      amount.textContent = `${p.amount ?? 0}`;
       g.appendChild(c);
       g.appendChild(t);
+      g.appendChild(amount);
       g.style.cursor = 'pointer';
       g.addEventListener('click', async (ev) => {
         showPopup(p, ev.offsetX, ev.offsetY);
@@ -102,7 +128,11 @@ window.mapModule = (() => {
 
     const territoryLayer = document.getElementById('territory-layer');
     if (territoryLayer) {
-      territoryLayer.style.display = state.filters.territories ? 'block' : 'none';
+      territoryLayer.style.display = state.filters.territories && !state.regions.some((r) => Array.isArray(r.polygon) && r.polygon.length) ? 'block' : 'none';
+    }
+    const satelliteLayer = document.getElementById('satellite-layer');
+    if (satelliteLayer && state.bgImage) {
+      satelliteLayer.setAttribute('src', state.bgImage);
     }
   }
 
@@ -112,6 +142,8 @@ window.mapModule = (() => {
     const territories = await api('/api/territories');
     state.resources = resources.points || [];
     state.regions = territories.regions || [];
+    state.viewBox = territories.viewBox || '0 0 1200 800';
+    state.bgImage = territories.base_image || null;
     renderLegend();
     draw();
   }
