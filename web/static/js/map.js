@@ -16,6 +16,7 @@ window.mapModule = (() => {
       headers: {
         'Content-Type': 'application/json',
         ...(localStorage.webApiToken ? { 'X-API-Key': localStorage.webApiToken } : {}),
+        ...(localStorage.webAuthToken ? { Authorization: `Bearer ${localStorage.webAuthToken}` } : {}),
       },
       ...o,
     });
