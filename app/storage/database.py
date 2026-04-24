@@ -278,6 +278,19 @@ class Database:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS mobilization_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    mobilization_type TEXT NOT NULL,
+                    requested_amount INTEGER NOT NULL DEFAULT 0,
+                    success INTEGER NOT NULL DEFAULT 0,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS active_research (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     country_id INTEGER NOT NULL,
@@ -708,6 +721,21 @@ class Database:
             (str(r[0]), int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0))
             for r in rows
         ]
+
+    async def add_mobilization_attempt(
+        self,
+        country: str,
+        mobilization_type: str,
+        requested_amount: int,
+        success: bool,
+        details: str,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO mobilization_attempts (country, mobilization_type, requested_amount, success, details) VALUES (?, ?, ?, ?, ?)",
+                (country, mobilization_type, int(requested_amount), 1 if success else 0, details[:500]),
+            )
+            await db.commit()
 
     async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
         inserted = 0
