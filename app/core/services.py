@@ -49,6 +49,8 @@ RESEARCH_EFFECTS_DEFAULTS: dict[str, dict[str, object]] = {
 
 
 class NewsService:
+    MOB_SIGNAL_MAX_AGE_SECONDS = 23 * 24 * 3600
+
     def __init__(self, bot: Bot, db: Database):
         self.bot = bot
         self.db = db
@@ -364,8 +366,78 @@ class NewsService:
         low = text.lower()
         return any(
             probe in low
-            for probe in ("мобилизац", "#мобилизация", "призыв", "добровол", "демобилизац", "военный набор")
+            for probe in (
+                "мобилизац",
+                "#мобилизация",
+                "призыв",
+                "добровол",
+                "демобилизац",
+                "военный набор",
+                "частичн мобилизац",
+                "общая мобилизац",
+                "набор резерв",
+                "сбор резервист",
+            )
         )
+
+    @staticmethod
+    def _normalize_channel_name(raw_channel: str) -> str:
+        return (raw_channel or "").strip().lstrip("@").lower()
+
+    async def remember_mobilization_signal(self, post: IncomingPost, text: str) -> None:
+        if not post.source_country or post.source_country == "MANUAL":
+            return
+        if not self._news_has_mobilization_signal(text):
+            return
+        payload = {
+            "country": post.source_country,
+            "channel": self._normalize_channel_name(post.source_channel),
+            "message_id": int(post.message_id),
+            "ts": int(time.time()),
+        }
+        await self.db.set_state(f"mob_signal:{post.source_country}", json.dumps(payload, ensure_ascii=False))
+        raw = await self.db.get_state(f"mob_signal_history:{post.source_country}", "[]")
+        try:
+            history = json.loads(raw)
+            if not isinstance(history, list):
+                history = []
+        except Exception:
+            history = []
+        history.insert(0, payload)
+        await self.db.set_state(f"mob_signal_history:{post.source_country}", json.dumps(history[:25], ensure_ascii=False))
+
+    async def check_mobilization_news_criteria(self, country: str) -> tuple[bool, str]:
+        raw = await self.db.get_state(f"mob_signal:{country}", "")
+        if not raw:
+            return False, "Нет найденной новости о мобилизации для этой страны."
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return False, "Повреждены данные о последнем сигнале мобилизации."
+        ts = int(payload.get("ts", 0))
+        age = int(time.time()) - ts
+        if age > self.MOB_SIGNAL_MAX_AGE_SECONDS:
+            return False, "Последняя подходящая новость устарела (нужно не старше 23 дней)."
+        channel = self._normalize_channel_name(str(payload.get("channel", "")))
+        return True, f"Подходит: @{channel}, msg_id={int(payload.get('message_id', 0))}, давность ~{max(0, age // 3600)}ч."
+
+    async def render_recent_mobilization_signals(self, country: str, limit: int = 3) -> str:
+        raw = await self.db.get_state(f"mob_signal_history:{country}", "[]")
+        try:
+            history = json.loads(raw)
+            if not isinstance(history, list):
+                history = []
+        except Exception:
+            history = []
+        if not history:
+            return "Последние сигналы: нет."
+        lines = ["Последние сигналы:"]
+        for item in history[:max(1, limit)]:
+            age = max(0, (int(time.time()) - int(item.get("ts", 0))) // 3600)
+            lines.append(
+                f"• @{self._normalize_channel_name(str(item.get('channel', '')))} | msg:{int(item.get('message_id', 0))} | ~{age}ч назад"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def _seconds_until_week_end() -> int:
@@ -516,6 +588,10 @@ class NewsService:
             f"Военные заводы: <b>{factories}</b>",
             f"Статус войны: <b>{war_status}</b>, риск: <b>{risk}</b>",
             "",
+            f"{'✅' if (await self.check_mobilization_news_criteria(country))[0] else '❌'} "
+            f"Критерии: {(await self.check_mobilization_news_criteria(country))[1]}",
+            await self.render_recent_mobilization_signals(country),
+            "",
             "<b>Доступные типы:</b>",
         ]
         for key, profile in config.mobilization_profiles.items():
@@ -543,6 +619,10 @@ class NewsService:
         statuses = [str(s) for s in req["war_status"]]
         if statuses and war_status not in statuses:
             return False, f"Нужен статус: {', '.join(statuses)}. Сейчас: {war_status}."
+        criteria_ok, criteria_msg = await self.check_mobilization_news_criteria(country)
+        if not criteria_ok:
+            await self.db.add_mobilization_attempt(country, mob_type, requested_amount, False, criteria_msg)
+            return False, f"Критерии мобилизации не выполнены. {criteria_msg}"
 
         week_key = self._week_key_utc()
         plan_key = f"mobplan:{country}"
@@ -552,6 +632,8 @@ class NewsService:
                 plan = json.loads(plan_raw)
                 if plan.get("active") and plan.get("week_key") == week_key:
                     return False, "Мобилизация уже запущена на эту неделю. Дождитесь завершения."
+                if plan.get("stopped_week") == week_key:
+                    return False, "На этой неделе мобилизация уже останавливалась. Повторный запуск запрещён."
             except Exception:
                 pass
 
@@ -570,12 +652,32 @@ class NewsService:
         await self.db.update_country_mobilization(country, mob_type, 0, requested_amount, week_key, int(time.time()))
         left = self._seconds_until_week_end()
         finish_dt = datetime.now(timezone.utc) + timedelta(seconds=left)
+        await self.db.add_mobilization_attempt(country, mob_type, requested_amount, True, "start_ok")
         return (
             True,
             f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед.\n"
             f"⏱ Длительность: {self._format_duration(left)}\n"
             f"📅 Завершится: {finish_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         )
+
+    async def force_finish_mobilization(self, country: str, reason: str, actor_id: int) -> tuple[bool, str]:
+        key = f"mobplan:{country}"
+        raw = await self.db.get_state(key, "")
+        if not raw:
+            return False, "Активная мобилизация не найдена."
+        try:
+            plan = json.loads(raw)
+        except Exception:
+            return False, "Не удалось прочитать план мобилизации."
+        if not plan.get("active"):
+            return False, "Мобилизация уже завершена."
+        plan["active"] = False
+        plan["stopped_week"] = self._week_key_utc()
+        plan["force_stopped_by"] = int(actor_id)
+        plan["force_stop_reason"] = reason[:180]
+        await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+        await self.db.add_mobilization_attempt(country, str(plan.get("mob_type", "unknown")), int(plan.get("target", 0)), True, f"forced_stop:{reason[:120]}")
+        return True, "⛔️ Мобилизация принудительно остановлена."
 
     async def process_mobilization_plans(self) -> None:
         now_ts = int(time.time())
@@ -589,6 +691,7 @@ class NewsService:
                 continue
             if plan.get("week_key") != week_key:
                 plan["active"] = False
+                plan["stopped_week"] = str(plan.get("week_key", week_key))
                 await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
                 continue
             if now_ts - int(plan.get("last_tick_ts", 0)) < 6 * 3600:
@@ -601,6 +704,7 @@ class NewsService:
             remaining = max(0, target - gained)
             if remaining <= 0:
                 plan["active"] = False
+                plan["stopped_week"] = week_key
                 await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
                 continue
             soldiers_chunk = max(1, min(remaining, max(1, target // 7)))
@@ -610,6 +714,7 @@ class NewsService:
             plan["last_tick_ts"] = now_ts
             if new_gained >= target:
                 plan["active"] = False
+                plan["stopped_week"] = week_key
             await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
             await self.db.update_country_mobilization(country, mob_type, new_gained, target, week_key, now_ts)
             await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
@@ -1291,6 +1396,7 @@ class NewsService:
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
         corrected = self._humanize_text_variation(corrected)
+        await self.remember_mobilization_signal(post, corrected)
         age_h = self._news_age_hours(post)
         if age_h > 168:
             corrected = f"Архивная новость (задержка публикации): {corrected}"

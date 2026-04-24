@@ -9,6 +9,14 @@
 <body>
   <header class="topbar">
     <h1>🌍 RP Панель</h1>
+    <div class="auth-box">
+      <input id="auth-tg" placeholder="Telegram ID" />
+      <input id="auth-pass" type="password" placeholder="Пароль" />
+      <input id="auth-2fa" type="password" placeholder="2FA PIN (если есть)" />
+      <button id="auth-login">Войти</button>
+      <button id="auth-register">Регистрация</button>
+      <span id="auth-state"></span>
+    </div>
     <label>Страна:
       <select id="country"></select>
     </label>
@@ -32,7 +40,7 @@
           </div>
 
           <div id="map-wrap" class="map-wrap">
-            <img src="{{ url_for('static', filename='images/satellite.svg') }}" class="layer" alt="satellite"/>
+            <img id="satellite-layer" src="{{ url_for('static', filename='images/satellite.svg') }}" class="layer" alt="satellite"/>
             <img id="territory-layer" src="{{ url_for('static', filename='images/territories.svg') }}" class="layer top" alt="territories"/>
             <svg id="map-overlay" viewBox="0 0 1200 800"></svg>
             <div id="point-popup" class="popup hidden"></div>

@@ -60,3 +60,63 @@ def test_claim_forwards_to_bot(tmp_path, monkeypatch):
     body = resp.get_json()
     assert body["success"] is True
     assert body["result"]["point_id"] == "stone_1"
+
+
+def test_auth_register_login_and_role_change(tmp_path, monkeypatch):
+    db = tmp_path / "db.sqlite3"
+    seed(str(db))
+    resources = tmp_path / "resources.json"
+    territories = tmp_path / "territories.json"
+    resources.write_text(json.dumps({"points": []}, ensure_ascii=False), encoding="utf-8")
+    territories.write_text(json.dumps({"regions": []}, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(web_app, "RESOURCES_PATH", resources)
+    monkeypatch.setattr(web_app, "TERRITORIES_PATH", territories)
+    monkeypatch.setattr(web_app, "SUPREME_TG_ID", 999)
+    monkeypatch.setattr(web_app, "SUPREME_PASSWORD", "sup-pass")
+
+    app = web_app.create_app(str(db))
+    client = app.test_client()
+
+    reg = client.post("/api/auth/register", json={"telegram_id": 111, "password": "secret12", "twofa_pin": "1234"})
+    assert reg.status_code == 200
+
+    login = client.post("/api/auth/login", json={"telegram_id": 111, "password": "secret12"})
+    assert login.status_code == 200
+    pre = login.get_json()
+    assert pre["requires_2fa"] is True
+    verify = client.post("/api/auth/verify_2fa", json={"pre_token": pre["pre_token"], "twofa_pin": "1234"})
+    token = verify.get_json()["token"]
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+
+    sup_login = client.post("/api/auth/login", json={"telegram_id": 999, "password": "sup-pass"})
+    sup_token = sup_login.get_json()["token"]
+    promote = client.post(
+        "/api/admin/users/role",
+        json={"telegram_id": 111, "role": "admin"},
+        headers={"Authorization": f"Bearer {sup_token}"},
+    )
+    assert promote.status_code == 200
+
+
+def test_admin_territories_import(tmp_path, monkeypatch):
+    db = tmp_path / "db.sqlite3"
+    seed(str(db))
+    resources = tmp_path / "resources.json"
+    territories = tmp_path / "territories.json"
+    resources.write_text(json.dumps({"points": []}, ensure_ascii=False), encoding="utf-8")
+    territories.write_text(json.dumps({"regions": []}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(web_app, "RESOURCES_PATH", resources)
+    monkeypatch.setattr(web_app, "TERRITORIES_PATH", territories)
+
+    app = web_app.create_app(str(db))
+    client = app.test_client()
+    resp = client.post(
+        "/api/admin/territories/import",
+        json={"viewBox": "0 0 1000 1000", "regions": [{"id": "r1", "polygon": [{"x": 1, "y": 2}, {"x": 3, "y": 4}]}]},
+    )
+    assert resp.status_code == 200
+    saved = json.loads(territories.read_text(encoding="utf-8"))
+    assert saved["viewBox"] == "0 0 1000 1000"
+    assert saved["regions"][0]["id"] == "r1"
