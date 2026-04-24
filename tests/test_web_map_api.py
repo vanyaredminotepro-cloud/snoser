@@ -120,3 +120,47 @@ def test_admin_territories_import(tmp_path, monkeypatch):
     saved = json.loads(territories.read_text(encoding="utf-8"))
     assert saved["viewBox"] == "0 0 1000 1000"
     assert saved["regions"][0]["id"] == "r1"
+
+
+def test_auth_logout_and_admin_list_users(tmp_path, monkeypatch):
+    db = tmp_path / "db.sqlite3"
+    seed(str(db))
+    resources = tmp_path / "resources.json"
+    territories = tmp_path / "territories.json"
+    resources.write_text(json.dumps({"points": []}, ensure_ascii=False), encoding="utf-8")
+    territories.write_text(json.dumps({"regions": []}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(web_app, "RESOURCES_PATH", resources)
+    monkeypatch.setattr(web_app, "TERRITORIES_PATH", territories)
+    monkeypatch.setattr(web_app, "SUPREME_TG_ID", 42)
+    monkeypatch.setattr(web_app, "SUPREME_PASSWORD", "sup-pass")
+
+    app = web_app.create_app(str(db))
+    client = app.test_client()
+
+    login = client.post("/api/auth/login", json={"telegram_id": 42, "password": "sup-pass"}).get_json()
+    token = login["token"]
+    users = client.get("/api/admin/users", headers={"Authorization": f"Bearer {token}"})
+    assert users.status_code == 200
+    logout = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert logout.status_code == 200
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 401
+
+
+def test_login_rate_limit(tmp_path, monkeypatch):
+    db = tmp_path / "db.sqlite3"
+    seed(str(db))
+    resources = tmp_path / "resources.json"
+    territories = tmp_path / "territories.json"
+    resources.write_text(json.dumps({"points": []}, ensure_ascii=False), encoding="utf-8")
+    territories.write_text(json.dumps({"regions": []}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(web_app, "RESOURCES_PATH", resources)
+    monkeypatch.setattr(web_app, "TERRITORIES_PATH", territories)
+
+    app = web_app.create_app(str(db))
+    client = app.test_client()
+    for _ in range(5):
+        resp = client.post("/api/auth/login", json={"telegram_id": 777, "password": "bad-pass"})
+        assert resp.status_code == 401
+    blocked = client.post("/api/auth/login", json={"telegram_id": 777, "password": "bad-pass"})
+    assert blocked.status_code == 429

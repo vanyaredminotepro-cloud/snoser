@@ -75,6 +75,14 @@ def _session_user(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return row
 
 
+def _session_token() -> str | None:
+    auth = request.headers.get("Authorization", "").strip()
+    if not auth.lower().startswith("bearer "):
+        return None
+    token = auth.split(" ", 1)[1].strip()
+    return token or None
+
+
 def _load_json(path: Path, fallback: dict) -> dict:
     if not path.exists():
         return fallback
@@ -140,6 +148,16 @@ def ensure_schema(path: str) -> None:
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS web_login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -311,23 +329,38 @@ def create_app(db_path: str | None = None) -> Flask:
         tg_id = int(payload.get("telegram_id") or 0)
         password = str(payload.get("password") or "")
         with _db(app.config["DB_PATH"]) as conn:
+            blocked = conn.execute(
+                """
+                SELECT COUNT(*) FROM web_login_attempts
+                WHERE telegram_id = ? AND success = 0 AND created_at >= datetime('now','-15 minutes')
+                """,
+                (tg_id,),
+            ).fetchone()
+            if int(blocked[0] or 0) >= 5:
+                return jsonify({"error": "too many attempts, try later"}), 429
             row = conn.execute(
                 "SELECT id, password_hash, password_salt, twofa_pin_hash, active FROM web_users WHERE telegram_id = ?",
                 (tg_id,),
             ).fetchone()
             if row is None or int(row["active"]) != 1:
+                conn.execute("INSERT INTO web_login_attempts (telegram_id, success) VALUES (?, 0)", (tg_id,))
+                conn.commit()
                 return jsonify({"error": "invalid credentials"}), 401
             if _hash_password(password, str(row["password_salt"])) != str(row["password_hash"]):
+                conn.execute("INSERT INTO web_login_attempts (telegram_id, success) VALUES (?, 0)", (tg_id,))
+                conn.commit()
                 return jsonify({"error": "invalid credentials"}), 401
             if str(row["twofa_pin_hash"]):
                 pre_token = _issue_token()
                 exp = datetime.now(timezone.utc) + timedelta(minutes=10)
                 conn.execute("INSERT OR REPLACE INTO web_sessions (token, user_id, expires_at) VALUES (?, ?, ?)", (f"pre:{pre_token}", int(row["id"]), exp.isoformat()))
+                conn.execute("INSERT INTO web_login_attempts (telegram_id, success) VALUES (?, 1)", (tg_id,))
                 conn.commit()
                 return jsonify({"success": True, "requires_2fa": True, "pre_token": pre_token})
             token = _issue_token()
             exp = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
             conn.execute("INSERT OR REPLACE INTO web_sessions (token, user_id, expires_at) VALUES (?, ?, ?)", (token, int(row["id"]), exp.isoformat()))
+            conn.execute("INSERT INTO web_login_attempts (telegram_id, success) VALUES (?, 1)", (tg_id,))
             conn.commit()
         return jsonify({"success": True, "token": token, "requires_2fa": False})
 
@@ -361,6 +394,27 @@ def create_app(db_path: str | None = None) -> Flask:
             if user is None:
                 return jsonify({"error": "unauthorized"}), 401
             return jsonify({"telegram_id": int(user["telegram_id"]), "role": str(user["role"])})
+
+    @app.post("/api/auth/logout")
+    def api_auth_logout():
+        token = _session_token()
+        if not token:
+            return jsonify({"error": "unauthorized"}), 401
+        with _db(app.config["DB_PATH"]) as conn:
+            conn.execute("DELETE FROM web_sessions WHERE token = ?", (token,))
+            conn.commit()
+        return jsonify({"success": True})
+
+    @app.get("/api/admin/users")
+    def api_admin_users():
+        with _db(app.config["DB_PATH"]) as conn:
+            actor = _session_user(conn)
+            if actor is None or str(actor["role"]) not in {"supreme", "admin"}:
+                return jsonify({"error": "forbidden"}), 403
+            rows = conn.execute(
+                "SELECT telegram_id, role, active, created_at FROM web_users ORDER BY id ASC LIMIT 200"
+            ).fetchall()
+            return jsonify([dict(r) for r in rows])
 
     @app.post("/api/admin/users/role")
     def api_admin_users_role():

@@ -10,6 +10,14 @@
     if (!r.ok) throw new Error(j.error || 'auth error');
     return j;
   };
+  const authGet = async (url) => {
+    const r = await fetch(url, {
+      headers: localStorage.webAuthToken ? { Authorization: `Bearer ${localStorage.webAuthToken}` } : {},
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'auth error');
+    return j;
+  };
 
   async function loginFlow(registerMode = false) {
     const tg = Number(document.getElementById('auth-tg')?.value || 0);
@@ -34,6 +42,21 @@
 
   document.getElementById('auth-login')?.addEventListener('click', async () => loginFlow(false));
   document.getElementById('auth-register')?.addEventListener('click', async () => loginFlow(true));
+  document.getElementById('auth-logout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: localStorage.webAuthToken ? { Authorization: `Bearer ${localStorage.webAuthToken}` } : {},
+      });
+    } finally {
+      localStorage.removeItem('webAuthToken');
+      authState.textContent = 'Выход выполнен';
+    }
+  });
+  try {
+    const me = await authGet('/api/auth/me');
+    authState.textContent = `Вход: ${me.telegram_id} (${me.role})`;
+  } catch (_e) {}
 
   const tabs = document.querySelectorAll('.tab');
   const panes = {
