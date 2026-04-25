@@ -278,6 +278,33 @@ class Database:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS mobilization_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    mobilization_type TEXT NOT NULL,
+                    planned INTEGER NOT NULL DEFAULT 0,
+                    gained INTEGER NOT NULL DEFAULT 0,
+                    started_ts INTEGER NOT NULL DEFAULT 0,
+                    end_ts INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    stop_reason TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS country_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    position TEXT NOT NULL,
+                    assigned_at INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS active_research (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     country_id INTEGER NOT NULL,
@@ -516,6 +543,23 @@ class Database:
             row = await cursor.fetchone()
         return row is not None
 
+    async def has_approved_position(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM country_positions WHERE user_id = ? AND active = 1 LIMIT 1",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def add_country_position(self, country: str, user_id: int, position: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO country_positions (country, user_id, position, assigned_at, active) VALUES (?, ?, ?, strftime('%s','now'), 1)",
+                (country, user_id, position),
+            )
+            await db.commit()
+
     async def has_approved_registration(self, user_id: int, reg_type: str) -> bool:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
@@ -708,6 +752,40 @@ class Database:
             (str(r[0]), int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0))
             for r in rows
         ]
+
+    async def add_mobilization_attempt(
+        self,
+        country: str,
+        mobilization_type: str,
+        planned: int,
+        started_ts: int,
+        end_ts: int,
+    ) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "INSERT INTO mobilization_attempts (country, mobilization_type, planned, gained, started_ts, end_ts, status) VALUES (?, ?, ?, 0, ?, ?, 'active')",
+                (country, mobilization_type, int(planned), int(started_ts), int(end_ts)),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+
+    async def complete_mobilization_attempt(self, attempt_id: int, gained: int, status: str, stop_reason: str = "") -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE mobilization_attempts SET gained = ?, status = ?, stop_reason = ? WHERE id = ?",
+                (int(gained), status, stop_reason, int(attempt_id)),
+            )
+            await db.commit()
+
+    async def get_active_mobilization_attempt(self, country: str) -> tuple[int, int, int, str] | None:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT id, planned, end_ts, mobilization_type FROM mobilization_attempts WHERE country = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+                (country,),
+            )).fetchone()
+        if not row:
+            return None
+        return int(row[0]), int(row[1]), int(row[2]), str(row[3])
 
     async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
         inserted = 0

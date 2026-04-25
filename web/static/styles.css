@@ -20,6 +20,10 @@ input,select{width:100%;padding:7px;border-radius:8px;border:1px solid #3a4558;b
 #legend{display:grid;grid-template-columns:1fr;gap:4px;font-size:14px}
 #resourceList{max-height:160px;overflow:auto;border:1px solid #30363f;border-radius:8px;padding:6px}
 #resourceList button{width:100%;text-align:left;background:#243041;margin:2px 0}
+#researchCategories{display:flex;flex-wrap:wrap;gap:6px}
+#researchCategories button{background:#2d3142}
+.progress{height:8px;background:#1f2937;border-radius:10px;overflow:hidden}
+.progress > i{display:block;height:100%;background:#22c55e}
 
 body.light{background:#f0f0f0;color:#333}
 body.light .topbar{background:#fff;border-bottom:1px solid #ddd}

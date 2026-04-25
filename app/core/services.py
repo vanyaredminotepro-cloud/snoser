@@ -541,9 +541,58 @@ class NewsService:
             f"📅 Завершится: {finish_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         )
 
+    async def start_mobilization_auto(self, country: str, mob_type: str) -> tuple[bool, str]:
+        if mob_type not in config.mobilization_profiles:
+            return False, "Неизвестный тип мобилизации."
+        profile = config.mobilization_profiles[mob_type]
+        req = profile["requirements"]
+        factories = await self.db.get_military_factories(country)
+        war_status, _ = await self.db.get_country_war_and_risk(country)
+        if factories < int(req["factories"]):
+            return False, f"Нужно военных заводов: {req['factories']}, сейчас: {factories}."
+        statuses = [str(s) for s in req["war_status"]]
+        if statuses and war_status not in statuses:
+            return False, f"Нужен статус: {', '.join(statuses)}. Сейчас: {war_status}."
+
+        active = await self.db.get_active_mobilization_attempt(country)
+        if active:
+            return False, "У страны уже есть активная мобилизация."
+
+        cooldown_key = f"mob:cooldown:{country}"
+        now_ts = int(time.time())
+        cooldown_until = int(await self.db.get_state(cooldown_key, "0") or "0")
+        if cooldown_until > now_ts:
+            wait_h = max(1, (cooldown_until - now_ts) // 3600)
+            return False, f"Повторный запуск недоступен. Осталось ~{wait_h} ч."
+
+        citizens = await self.db.get_country_population(country)
+        min_gain = int(profile["min_gain"])
+        max_gain = int(profile["max_gain"])
+        planned = max(min_gain, min(max_gain, max(10, citizens // 12)))
+        duration_days = max(1, int(config.mobilization_duration_days))
+        end_ts = now_ts + duration_days * 86400
+        attempt_id = await self.db.add_mobilization_attempt(country, mob_type, planned, now_ts, end_ts)
+        plan = {
+            "attempt_id": attempt_id,
+            "country": country,
+            "mob_type": mob_type,
+            "target": planned,
+            "gained": 0,
+            "active": True,
+            "started_ts": now_ts,
+            "end_ts": end_ts,
+            "last_tick_ts": 0,
+        }
+        await self.db.set_state(f"mobplan:{country}", json.dumps(plan, ensure_ascii=False))
+        await self.db.update_country_mobilization(country, mob_type, 0, planned, self._week_key_utc(), now_ts)
+        await self.bot.send_message(
+            config.target_channel,
+            f"{country} объявляет {profile['label']} мобилизацию. План: {planned} солдат за {duration_days} дней.",
+        )
+        return True, f"✅ Мобилизация запущена автоматически: {planned} за {duration_days} дней."
+
     async def process_mobilization_plans(self) -> None:
         now_ts = int(time.time())
-        week_key = self._week_key_utc()
         for key, raw in await self.db.list_state_prefix("mobplan:"):
             try:
                 plan = json.loads(raw)
@@ -551,9 +600,9 @@ class NewsService:
                 continue
             if not plan.get("active"):
                 continue
-            if plan.get("week_key") != week_key:
-                plan["active"] = False
-                await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+            end_ts = int(plan.get("end_ts", 0))
+            if end_ts and now_ts >= end_ts:
+                await self._finish_mobilization_plan(key, plan, reason="duration_reached")
                 continue
             if now_ts - int(plan.get("last_tick_ts", 0)) < 6 * 3600:
                 continue
@@ -573,10 +622,49 @@ class NewsService:
             plan["gained"] = new_gained
             plan["last_tick_ts"] = now_ts
             if new_gained >= target:
-                plan["active"] = False
+                await self._finish_mobilization_plan(key, plan | {"gained": new_gained}, reason="plan_reached")
+                continue
             await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
-            await self.db.update_country_mobilization(country, mob_type, new_gained, target, week_key, now_ts)
+            await self.db.update_country_mobilization(country, mob_type, new_gained, target, self._week_key_utc(), now_ts)
             await self.db.add_mobilization_log(country, mob_type, soldiers, budget_change, life_change, risk_change, penalized=False)
+
+    async def _finish_mobilization_plan(self, key: str, plan: dict, reason: str) -> None:
+        country = str(plan.get("country", ""))
+        mob_type = str(plan.get("mob_type", "conscription"))
+        gained = int(plan.get("gained", 0))
+        target = int(plan.get("target", 0))
+        plan["active"] = False
+        await self.db.set_state(key, json.dumps(plan, ensure_ascii=False))
+        await self.db.update_country_mobilization(country, mob_type, gained, target, self._week_key_utc(), int(time.time()))
+        attempt_id = int(plan.get("attempt_id", 0))
+        if attempt_id:
+            await self.db.complete_mobilization_attempt(attempt_id, gained, "completed" if reason != "manual_stop" else "stopped", reason)
+        await self.db.apply_country_stats_delta(country, army_delta=gained, budget_delta=0, life_delta=0)
+        row = await self.db.get_country_stats(country)
+        budget = int(row[0]) if row else 0
+        life = int(row[3]) if row else 0
+        _, risk = await self.db.get_country_war_and_risk(country)
+        await self.bot.send_message(
+            config.target_channel,
+            f"{country} завершила мобилизацию. Набрано {gained} солдат из {target} запланированных. "
+            f"Уровень жизни: {life}, бюджет: {budget}, риск: {risk}.",
+        )
+        cooldown_until = int(time.time()) + int(config.mobilization_cooldown_days) * 86400
+        await self.db.set_state(f"mob:cooldown:{country}", str(cooldown_until))
+
+    async def stop_mobilization_early(self, country: str, stopped_by: int) -> tuple[bool, str]:
+        raw = await self.db.get_state(f"mobplan:{country}", "")
+        if not raw:
+            return False, "Активной мобилизации нет."
+        try:
+            plan = json.loads(raw)
+        except Exception:
+            return False, "План мобилизации повреждён."
+        if not plan.get("active"):
+            return False, "Активной мобилизации нет."
+        await self._finish_mobilization_plan(f"mobplan:{country}", plan, reason="manual_stop")
+        await self.bot.send_message(config.target_channel, f"{country} досрочно завершила мобилизацию (решение руководства).")
+        return True, f"Мобилизация остановлена (by={stopped_by})."
 
     async def _sync_mobilization_day4_from_news(self, post: IncomingPost, text: str) -> None:
         if not post.source_country or post.source_country == "MANUAL":

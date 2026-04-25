@@ -121,6 +121,8 @@ def ensure_schema(path: str) -> None:
         conn.execute("CREATE TABLE IF NOT EXISTS active_research (id INTEGER PRIMARY KEY AUTOINCREMENT, country TEXT NOT NULL, tech_id TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, duration_days INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, start_message_id INTEGER, effects TEXT, status TEXT NOT NULL DEFAULT 'active')")
         conn.execute("CREATE TABLE IF NOT EXISTS country_tech (country TEXT NOT NULL, tech_id TEXT NOT NULL, unlocked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (country, tech_id))")
         conn.execute("CREATE TABLE IF NOT EXISTS country_units (country TEXT NOT NULL, unit_type TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (country, unit_type))")
+        conn.execute("CREATE TABLE IF NOT EXISTS web_users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id TEXT UNIQUE NOT NULL, role TEXT NOT NULL DEFAULT 'user', password_hash TEXT NOT NULL DEFAULT '', pin_hash TEXT NOT NULL DEFAULT '', is_active INTEGER NOT NULL DEFAULT 1)")
+        conn.execute("CREATE TABLE IF NOT EXISTS web_login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, timestamp INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0)")
         conn.commit()
 
 
@@ -166,6 +168,28 @@ def create_app(db_path: str | None = None) -> Flask:
         with _db(app.config["DB_PATH"]) as conn:
             rows = conn.execute("SELECT id, country, tech_id, name, category, duration_days, start_date, end_date FROM active_research WHERE status = 'active' ORDER BY end_date ASC").fetchall()
         return jsonify([dict(r) for r in rows])
+
+    @app.get("/api/research/active/<country>")
+    def api_research_active_country(country: str):
+        now = datetime.now(timezone.utc)
+        with _db(app.config["DB_PATH"]) as conn:
+            rows = conn.execute(
+                "SELECT id, country, tech_id, name, category, duration_days, start_date, end_date FROM active_research WHERE status = 'active' AND country = ? ORDER BY end_date ASC",
+                (country,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                start = datetime.fromisoformat(str(item["start_date"]))
+                end = datetime.fromisoformat(str(item["end_date"]))
+                full = max(1.0, (end - start).total_seconds())
+                done = min(full, max(0.0, (now - start).total_seconds()))
+                item["progress"] = round((done / full) * 100, 2)
+            except Exception:
+                item["progress"] = 0.0
+            out.append(item)
+        return jsonify(out)
 
     @app.post("/api/research/start")
     def api_research_start():
@@ -308,6 +332,16 @@ def create_app(db_path: str | None = None) -> Flask:
             target["color"] = color
         _save_json(TERRITORIES_PATH, territories)
         return jsonify({"success": True, "regions": territories.get("regions", [])})
+
+    @app.get("/api/admin/users")
+    def api_admin_users():
+        if not _admin_authorized():
+            return jsonify({"error": "Unauthorized"}), 401
+        with _db(app.config["DB_PATH"]) as conn:
+            rows = conn.execute(
+                "SELECT id, telegram_id, role, is_active FROM web_users ORDER BY id ASC"
+            ).fetchall()
+        return jsonify([dict(r) for r in rows])
 
     return app
 

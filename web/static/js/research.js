@@ -1,5 +1,14 @@
 // Модуль исследований оставлен отдельным файлом для расширяемости UI.
-const researchState = { countries: [], selected: "", tree: {}, active: [] };
+const researchState = { countries: [], selected: "", tree: {}, active: [], category: "all" };
+const CATEGORY_LABELS = {
+  all: "Все",
+  aviation: "✈️ Авиация",
+  navy: "🚤 Флот",
+  drones: "🛸 Дроны",
+  rockets: "💥 Ракеты",
+  armor: "🛡️ Бронетехника",
+  technology: "📡 Технологии",
+};
 
 const api = async (url, options = {}) => {
   const response = await fetch(url, {
@@ -38,12 +47,13 @@ window.researchUI = {
     countrySelect.value = researchState.selected;
 
     researchState.tree = await api(`/api/tech_tree?country=${encodeURIComponent(researchState.selected)}`);
-    researchState.active = await api("/api/research/active");
+    researchState.active = await api(`/api/research/active/${encodeURIComponent(researchState.selected)}`);
     this.render();
     return researchState.selected;
   },
 
   render() {
+    this.renderCategories();
     const current = researchState.countries.find((c) => c.country === researchState.selected);
     document.getElementById("stats").innerHTML = current
       ? `Армия: ${current.army}<br>Бюджет: ${current.budget}<br>Граждане: ${current.citizens}<br>Жизнь: ${current.life_level}<br>Риск: ${current.risk_index}`
@@ -51,7 +61,7 @@ window.researchUI = {
 
     document.getElementById("active").innerHTML =
       researchState.active
-        .map((a) => `<div>${a.country}: ${a.name}<br><small>${timer(a.end_date)}</small></div>`)
+        .map((a) => `<div>${a.country}: ${a.name}<br><small>${timer(a.end_date)}</small><div class="progress"><i style="width:${a.progress || 0}%"></i></div></div>`)
         .join("") || "Нет";
 
     const root = document.getElementById("tree");
@@ -59,6 +69,7 @@ window.researchUI = {
     const tpl = document.getElementById("techTpl");
 
     for (const [techId, tech] of Object.entries(researchState.tree)) {
+      if (researchState.category !== "all" && tech.category !== researchState.category) continue;
       const node = tpl.content.firstElementChild.cloneNode(true);
       node.querySelector(".name").textContent = tech.name;
       node.querySelector(".desc").textContent = tech.description;
@@ -86,6 +97,18 @@ window.researchUI = {
       };
       root.appendChild(node);
     }
+  },
+  renderCategories() {
+    const wrap = document.getElementById("researchCategories");
+    wrap.innerHTML = Object.entries(CATEGORY_LABELS)
+      .map(([key, label]) => `<button data-cat="${key}" ${researchState.category===key?"style='background:#4a2a6a'":""}>${label}</button>`)
+      .join("");
+    wrap.querySelectorAll("button[data-cat]").forEach((btn) => {
+      btn.onclick = () => {
+        researchState.category = btn.dataset.cat || "all";
+        this.render();
+      };
+    });
   },
 
   getSelectedCountry() {

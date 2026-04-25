@@ -115,6 +115,16 @@ class Config:
     rss_poll_seconds: int = 45
     war_digest_threshold: int = 4
     map_request_cooldown_minutes: int = 30
+    mobilization_duration_days: int = field(default_factory=lambda: _optional_env_int("MOBILIZATION_DURATION_DAYS") or 7)
+    mobilization_cooldown_days: int = field(default_factory=lambda: _optional_env_int("MOBILIZATION_COOLDOWN_DAYS") or 3)
+    leadership_positions: tuple[str, ...] = (
+        "president",
+        "minister_defense",
+        "chief_of_staff",
+        "commander",
+        "general",
+        "intel_chief",
+    )
 
     source_channels: dict[str, str] = field(
         default_factory=lambda: {
