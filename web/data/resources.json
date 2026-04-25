@@ -1,0 +1,28 @@
+{
+  "points": [
+    {
+      "id": "stone_1",
+      "name": "Каменоломня-1",
+      "x": 380,
+      "y": 430,
+      "type": "камень",
+      "icon": "🪨",
+      "amount": 500,
+      "owner": "Обоссляндия",
+      "can_mine": true,
+      "region_id": "region_1"
+    },
+    {
+      "id": "cow_1",
+      "name": "Пастбище-1",
+      "x": 690,
+      "y": 730,
+      "type": "корова",
+      "icon": "🐄",
+      "amount": 60,
+      "owner": "Вилония",
+      "can_mine": true,
+      "region_id": "region_2"
+    }
+  ]
+}

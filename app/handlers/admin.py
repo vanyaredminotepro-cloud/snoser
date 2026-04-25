@@ -199,6 +199,7 @@ def _main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика стран (скоро)", callback_data="menu:country_stats")],
         [InlineKeyboardButton(text="🔬 Исследования (WEB)", url=config.web_dashboard_url)],
         [InlineKeyboardButton(text="⚔️ Мобилизация", callback_data="menu:mobilization")],
+        [InlineKeyboardButton(text="🛑 Остановить мобилизацию", callback_data="menu:stop_mobilization")],
         [InlineKeyboardButton(text="🧾 Оспорить отклонение", callback_data="menu:appeal")],
     ]
     if is_admin:
@@ -226,6 +227,12 @@ def _extract_country_name_from_form(form_text: str) -> str:
 
 
 def bind_admin_handlers(service: NewsService) -> Router:
+    async def _has_position_access(user_id: int) -> bool:
+        if user_id == config.admin_id:
+            return True
+        if await service.db.is_country_leader(user_id):
+            return True
+        return await service.db.has_approved_position(user_id)
     async def _resolve_user_id(bot, raw: str) -> int | None:
         value = raw.strip()
         if re.fullmatch(r"\d{5,15}", value):
@@ -289,6 +296,9 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await callback.answer()
 
         if action == "write_news":
+            if not await _has_position_access(callback.from_user.id):
+                await callback.message.answer("Доступ только для руководителей страны. Подайте заявку президенту через кнопку «Анкета».")
+                return
             await state.set_state(WriteNewsState.waiting_text)
             await callback.message.answer("Отправьте текст/медиа новости. Нужен хештег страны (#OBS / #OB / #VL и т.д.)")
             return
@@ -297,6 +307,9 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
             return
         if action == "stats":
+            if not await _has_position_access(callback.from_user.id):
+                await callback.message.answer("Доступ только для руководителей страны. Подайте заявку президенту через кнопку «Анкета».")
+                return
             stats_text = await service.render_global_stats()
             day, week, month, total = await service.db.news_stats()
             stats_text += (
@@ -319,6 +332,9 @@ def bind_admin_handlers(service: NewsService) -> Router:
                 await callback.message.answer(card, parse_mode="HTML")
             return
         if action == "mobilization":
+            if not await _has_position_access(callback.from_user.id):
+                await callback.message.answer("Доступ только для руководителей страны. Подайте заявку президенту через кнопку «Анкета».")
+                return
             user_countries = _user_allowed_countries(callback.from_user.id)
             if not user_countries and callback.from_user.id != config.admin_id:
                 await callback.message.answer("У вас нет страны для мобилизации.")
@@ -327,6 +343,15 @@ def bind_admin_handlers(service: NewsService) -> Router:
             text = await service.render_mobilization_status(country)
             await callback.message.answer(text, parse_mode="HTML")
             await callback.message.answer("Выберите тип мобилизации:", reply_markup=_mobilization_types_keyboard())
+            return
+        if action == "stop_mobilization":
+            user_countries = _user_allowed_countries(callback.from_user.id)
+            if not user_countries and callback.from_user.id != config.admin_id:
+                await callback.message.answer("У вас нет страны для управления мобилизацией.")
+                return
+            country = user_countries[0] if user_countries else "Обоссляндия"
+            ok, msg = await service.stop_mobilization_early(country, callback.from_user.id)
+            await callback.message.answer(msg if ok else f"❌ {msg}")
             return
         if action == "appeal":
             await state.set_state(AdminState.waiting_appeal)
@@ -826,7 +851,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not ok:
             await message.answer(reason)
 
-    return router
     @router.callback_query(F.data.startswith("mob:type:"))
     async def mobilization_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _guard_callback(callback):
@@ -837,29 +861,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await callback.answer("Нет страны для мобилизации", show_alert=True)
             return
         country = user_countries[0] if user_countries else "Обоссляндия"
-        await state.set_state(AdminState.waiting_mobilization_amount)
-        await state.update_data(mob_country=country, mob_type=mob_type)
-        profile = config.mobilization_profiles.get(mob_type, {})
-        await callback.message.answer(
-            f"Введите количество для мобилизации типа «{profile.get('label', mob_type)}» "
-            f"({profile.get('min_gain', 0)}-{profile.get('max_gain', 0)})."
-        )
+        ok, report = await service.start_mobilization_auto(country, mob_type)
+        await callback.message.answer(report if ok else f"❌ {report}")
         await callback.answer()
-
-    @router.message(AdminState.waiting_mobilization_amount)
-    async def mobilization_amount_flow(message: Message, state: FSMContext) -> None:
-        if not await _guard_message(message):
-            return
-        raw = (message.text or "").strip()
-        if not re.fullmatch(r"\d{1,4}", raw):
-            await message.answer("Введите число (количество людей).")
-            return
-        amount = int(raw)
-        data = await state.get_data()
-        country = str(data.get("mob_country", ""))
-        mob_type = str(data.get("mob_type", "conscription"))
-        ok, report = await service.start_mobilization(country, mob_type, amount)
-        await message.answer(report)
-        if ok:
-            await message.bot.send_message(config.admin_id, f"📌 Запуск мобилизации\n{country}\n{report}")
-        await state.clear()
+    return router

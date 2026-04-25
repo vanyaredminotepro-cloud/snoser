@@ -313,3 +313,17 @@ python web_research/app.py
 ```
 
 По умолчанию URL: `http://localhost:5000`.
+
+## Проверка последнего изменения в репозитории
+
+Чтобы быстро посмотреть детали последнего коммита, используйте:
+
+```bash
+git log -1 --date=iso --pretty=format:'%H%nAuthor: %an <%ae>%nDate: %ad%n%n%s%n%n%b'
+```
+
+Чтобы увидеть, какие файлы изменились в последнем коммите:
+
+```bash
+git show --name-status --oneline -1
+```
