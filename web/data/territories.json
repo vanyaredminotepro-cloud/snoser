@@ -1,6 +1,0 @@
-{
-  "regions": [
-    {"id":"region_1","name":"Северный лес","color":"#ff0000","owner":"Обоссляндия","capital":{"x":220,"y":330}},
-    {"id":"region_2","name":"Южные поля","color":"#00ff88","owner":"Вилония","capital":{"x":390,"y":280}}
-  ]
-}
