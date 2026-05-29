@@ -16,6 +16,7 @@ from flask import Flask, jsonify, render_template, request
 DB_PATH = os.environ.get("DB_PATH", "app/storage/bot_data.sqlite3")
 API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
 BOT_WEBHOOK_URL = os.environ.get("BOT_WEBHOOK_URL", "http://127.0.0.1:8090/webhook/resource/claim").strip()
+BOT_RESEARCH_WEBHOOK_URL = os.environ.get("BOT_RESEARCH_WEBHOOK_URL", "http://127.0.0.1:8090/webhook/research/start").strip()
 BOT_WEBHOOK_SECRET = os.environ.get("BOT_WEBHOOK_SECRET", "dev-secret").strip()
 SESSION_TTL_HOURS = int(os.environ.get("WEB_SESSION_TTL_HOURS", "24"))
 SUPREME_TG_ID = int(os.environ.get("WEB_SUPREME_TELEGRAM_ID", "5006629901"))
@@ -97,9 +98,17 @@ def _save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _forward_claim_to_bot(payload: dict) -> tuple[int, dict]:
+def _country_id_for_name(conn: sqlite3.Connection, country: str) -> int:
+    rows = conn.execute("SELECT country FROM country_stats ORDER BY country").fetchall()
+    for idx, row in enumerate(rows, start=1):
+        if str(row["country"]) == country:
+            return idx
+    return 0
+
+
+def _post_json_webhook(url: str, payload: dict) -> tuple[int, dict]:
     req = urllib.request.Request(
-        BOT_WEBHOOK_URL,
+        url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -122,11 +131,27 @@ def _forward_claim_to_bot(payload: dict) -> tuple[int, dict]:
         return 502, {"error": f"webhook unreachable: {exc}"}
 
 
+def _forward_claim_to_bot(payload: dict) -> tuple[int, dict]:
+    return _post_json_webhook(BOT_WEBHOOK_URL, payload)
+
+
+def _forward_research_to_bot(payload: dict) -> tuple[int, dict]:
+    return _post_json_webhook(BOT_RESEARCH_WEBHOOK_URL, payload)
+
+
 def ensure_schema(path: str) -> None:
     with _db(path) as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS active_research (id INTEGER PRIMARY KEY AUTOINCREMENT, country TEXT NOT NULL, tech_id TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, duration_days INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, start_message_id INTEGER, effects TEXT, status TEXT NOT NULL DEFAULT 'active')")
+        conn.execute("CREATE TABLE IF NOT EXISTS active_research (id INTEGER PRIMARY KEY AUTOINCREMENT, country_id INTEGER NOT NULL DEFAULT 0, country TEXT NOT NULL DEFAULT '', tech_id TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, duration_days INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, start_message_id INTEGER, effects TEXT, status TEXT NOT NULL DEFAULT 'active')")
         conn.execute("CREATE TABLE IF NOT EXISTS country_tech (country TEXT NOT NULL, tech_id TEXT NOT NULL, unlocked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (country, tech_id))")
         conn.execute("CREATE TABLE IF NOT EXISTS country_units (country TEXT NOT NULL, unit_type TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (country, unit_type))")
+        try:
+            conn.execute("ALTER TABLE active_research ADD COLUMN country_id INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE active_research ADD COLUMN country TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS web_users (
@@ -292,12 +317,25 @@ def create_app(db_path: str | None = None) -> Flask:
             start_dt = datetime.now(timezone.utc)
             end_dt = start_dt + timedelta(days=int(tech["duration"]))
             conn.execute("UPDATE country_stats SET budget = ?, updated_at = CURRENT_TIMESTAMP WHERE country = ?", (budget - int(tech["cost"]), country))
-            conn.execute(
-                "INSERT INTO active_research (country, tech_id, name, category, duration_days, start_date, end_date, effects, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
-                (country, tech_id, str(tech["name"]), str(tech["category"]), int(tech["duration"]), start_dt.isoformat(), end_dt.isoformat(), json.dumps(tech.get("effects", {}), ensure_ascii=False)),
+            country_id = _country_id_for_name(conn, country)
+            cur = conn.execute(
+                "INSERT INTO active_research (country_id, country, tech_id, name, category, duration_days, start_date, end_date, effects, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')",
+                (country_id, country, tech_id, str(tech["name"]), str(tech["category"]), int(tech["duration"]), start_dt.isoformat(), end_dt.isoformat(), json.dumps(tech.get("effects", {}), ensure_ascii=False)),
             )
+            research_id = int(cur.lastrowid or 0)
             conn.commit()
-        return jsonify({"success": True, "end_date": end_dt.isoformat()})
+        hook_status, hook_body = _forward_research_to_bot({
+            "research_id": research_id,
+            "country": country,
+            "tech_id": tech_id,
+            "name": str(tech["name"]),
+            "category": str(tech["category"]),
+            "duration_days": int(tech["duration"]),
+            "cost": int(tech["cost"]),
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat(),
+        })
+        return jsonify({"success": True, "end_date": end_dt.isoformat(), "news_status": hook_status, "news_result": hook_body})
 
     @app.post("/api/auth/register")
     def api_auth_register():

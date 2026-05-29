@@ -293,7 +293,8 @@ class Database:
                 """
                 CREATE TABLE IF NOT EXISTS active_research (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    country_id INTEGER NOT NULL,
+                    country_id INTEGER NOT NULL DEFAULT 0,
+                    country TEXT NOT NULL DEFAULT '',
                     tech_id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     category TEXT NOT NULL,
@@ -338,6 +339,10 @@ class Database:
                 )
                 """
             )
+            try:
+                await db.execute("ALTER TABLE active_research ADD COLUMN country TEXT NOT NULL DEFAULT ''")
+            except aiosqlite.OperationalError:
+                pass
             try:
                 await db.execute("ALTER TABLE active_research ADD COLUMN start_message_id INTEGER")
             except aiosqlite.OperationalError:
@@ -1063,7 +1068,7 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             rows = await (await db.execute(
                 """
-                SELECT id, country_id, tech_id, name, category, duration_days, start_date, end_date, start_message_id, effects
+                SELECT id, country_id, country, tech_id, name, category, duration_days, start_date, end_date, start_message_id, effects
                 FROM active_research
                 WHERE status = 'active' AND end_date <= ?
                 ORDER BY end_date ASC
@@ -1074,14 +1079,15 @@ class Database:
             {
                 "id": int(r[0]),
                 "country_id": int(r[1]),
-                "tech_id": str(r[2]),
-                "name": str(r[3]),
-                "category": str(r[4]),
-                "duration_days": int(r[5]),
-                "start_date": str(r[6]),
-                "end_date": str(r[7]),
-                "start_message_id": int(r[8]) if r[8] is not None else None,
-                "effects": str(r[9] or "{}"),
+                "country": str(r[2] or ""),
+                "tech_id": str(r[3]),
+                "name": str(r[4]),
+                "category": str(r[5]),
+                "duration_days": int(r[6]),
+                "start_date": str(r[7]),
+                "end_date": str(r[8]),
+                "start_message_id": int(r[9]) if r[9] is not None else None,
+                "effects": str(r[10] or "{}"),
             }
             for r in rows
         ]

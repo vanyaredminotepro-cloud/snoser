@@ -151,9 +151,22 @@ def test_start_mobilization_generates_signal_and_news_without_manual_post(tmp_pa
         ok, msg = await svc.start_mobilization("Вилония", "conscription", 5)
         assert ok
         assert "Новость о мобилизации" in msg
+        assert "Скорость" in msg
         criteria_ok, criteria_msg = await svc.check_mobilization_news_criteria("Вилония")
         assert criteria_ok
         assert "кнопкой мобилизации" in criteria_msg
+
+    asyncio.run(_run())
+
+
+def test_mobilization_amount_is_capped_by_population(tmp_path: Path):
+    async def _run():
+        svc, db = await _mk_service(tmp_path)
+        await db.seed_country_stats({"Малолюдия": {"budget": 100000, "army": 10, "citizens": 100, "life_level": 50}})
+        await db.set_country_war_status("Малолюдия", "peace")
+        ok, msg = await svc.start_mobilization("Малолюдия", "conscription", 500)
+        assert not ok
+        assert "Слишком много" in msg
 
     asyncio.run(_run())
 

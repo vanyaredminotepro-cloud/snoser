@@ -904,8 +904,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
                 t(
                     "mobilization_amount_prompt",
                     label=profile.get("label", mob_type),
-                    min_gain=profile.get("min_gain", 0),
-                    max_gain=profile.get("max_gain", 0),
+                    min_gain=1,
+                    max_gain="сколько нужно",
                 )
             )
             await callback.answer()
@@ -918,8 +918,8 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not await _guard_message(message):
             return
         raw = (message.text or "").strip()
-        if not re.fullmatch(r"\d{1,4}", raw):
-            await message.answer("Введите число (количество людей).")
+        if not re.fullmatch(r"\d{1,7}", raw):
+            await message.answer("Введите число людей для мобилизации (например: 50).")
             return
         amount = int(raw)
         data = await state.get_data()

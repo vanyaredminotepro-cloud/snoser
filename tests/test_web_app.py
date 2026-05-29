@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import web.app as web_app
 from web.app import create_app
 
 
@@ -17,12 +18,14 @@ def seed(path: str):
     conn.close()
 
 
-def test_research_start(tmp_path):
+def test_research_start(tmp_path, monkeypatch):
     db = tmp_path / "db.sqlite3"
     seed(str(db))
+    monkeypatch.setattr(web_app, "_forward_research_to_bot", lambda payload: (200, {"ok": True, "name": payload["name"]}))
     app = create_app(str(db))
     c = app.test_client()
     res = c.post('/api/research/start', json={'country': 'Вилония', 'tech_id': 'drone_recon'})
     assert res.status_code == 200
+    assert res.get_json()["news_status"] == 200
     active = c.get('/api/research/active').get_json()
     assert len(active) == 1
