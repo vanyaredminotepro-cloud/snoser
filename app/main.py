@@ -78,7 +78,7 @@ def _apply_resource_claim(payload: dict) -> dict:
     }
 
 
-async def _control_server(port: int, db: Database) -> asyncio.AbstractServer:
+async def _control_server(port: int, db: Database, service: NewsService | None = None) -> asyncio.AbstractServer:
     async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         body_bytes = b""
         status = 200
@@ -111,6 +111,38 @@ async def _control_server(port: int, db: Database) -> asyncio.AbstractServer:
                     await db.set_state("webhook:last_resource_claim", json.dumps(event, ensure_ascii=False))
                     count = int(await db.get_state("metric:webhook_resource_claim_total", "0") or "0")
                     await db.set_state("metric:webhook_resource_claim_total", str(count + 1))
+            elif method == "POST" and path == "/webhook/research/start":
+                secret = headers.get("x-webhook-secret", "")
+                if config.bot_webhook_secret and secret != config.bot_webhook_secret:
+                    status = 401
+                    payload = {"error": "invalid secret"}
+                elif service is None:
+                    status = 503
+                    payload = {"error": "bot service is not ready"}
+                else:
+                    event = json.loads(body_bytes.decode("utf-8") or "{}")
+                    country = str(event.get("country") or "").strip()
+                    name = str(event.get("name") or event.get("tech_id") or "исследование").strip()
+                    duration_days = int(event.get("duration_days") or 0)
+                    end_date = str(event.get("end_date") or "")
+                    if not country or not name:
+                        status = 400
+                        payload = {"error": "country and name are required"}
+                    else:
+                        text = (
+                            f"🔬 <b>{country} начинает исследование</b>\n"
+                            f"Тема: <b>{name}</b>\n"
+                            f"Длительность: <b>{duration_days} дн.</b>\n"
+                            f"Завершение: <b>{end_date}</b>"
+                        )
+                        if service.user_client:
+                            await service._send_with_retry(lambda: service._send_to_target_channel(text, parse_mode="html"))
+                        else:
+                            await service.bot.send_message(config.target_channel, text, parse_mode="HTML")
+                        await db.set_state("webhook:last_research_start", json.dumps(event, ensure_ascii=False))
+                        count = int(await db.get_state("metric:webhook_research_start_total", "0") or "0")
+                        await db.set_state("metric:webhook_research_start_total", str(count + 1))
+                        payload = {"ok": True, "country": country, "name": name}
             else:
                 status = 404
                 payload = {"error": "not found"}
@@ -154,9 +186,6 @@ async def main() -> None:
     await db.init()
 
     control_server: asyncio.AbstractServer | None = None
-    if config.healthcheck_enabled:
-        control_server = await _control_server(config.webhook_port, db)
-        logger.info("Control server enabled on 0.0.0.0:%s", config.webhook_port)
 
     seeded = await db.seed_country_leaders(config.manual_country_authors)
     logger.info("Country leaders seeded from config: %s", seeded)
@@ -164,6 +193,10 @@ async def main() -> None:
     logger.info("Country stats seeded from config: %s", stats_seeded)
     extras_seeded = await db.seed_country_extra_metrics(config.initial_country_extra_metrics)
     logger.info("Country extra metrics seeded from config: %s", extras_seeded)
+    factory_seeded = await db.seed_military_factories(config.initial_military_factories)
+    logger.info("Military factories seeded from config: %s", factory_seeded)
+    resources_seeded = await db.seed_economic_resources(config.initial_economic_resources)
+    logger.info("Economic resources seeded from config: %s", resources_seeded)
 
     try:
         runtime = AppRuntime()
@@ -174,6 +207,9 @@ async def main() -> None:
 
     service = NewsService(runtime.bot, db)
     await service.load_dynamic_config()
+    if config.healthcheck_enabled:
+        control_server = await _control_server(config.webhook_port, db, service)
+        logger.info("Control server enabled on 0.0.0.0:%s", config.webhook_port)
     try:
         await runtime.run(service)
     finally:

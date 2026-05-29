@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.config import config
 from app.core.models import IncomingPost
 from app.core.services import NewsService
+from app.localization import t
 from app.utils.text_tools import content_hash
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class AdminState(StatesGroup):
     waiting_user_manage_target = State()
     waiting_user_ban_reason = State()
     waiting_mobilization_amount = State()
+    waiting_mobilization_force_reason = State()
     waiting_proxy_update = State()
 
 
@@ -212,6 +214,8 @@ def _mobilization_types_keyboard() -> InlineKeyboardMarkup:
     rows = []
     for key, profile in config.mobilization_profiles.items():
         rows.append([InlineKeyboardButton(text=str(profile["label"]), callback_data=f"mob:type:{key}")])
+    rows.append([InlineKeyboardButton(text="🔎 Проверить критерии", callback_data="mob:criteria")])
+    rows.append([InlineKeyboardButton(text="⛔️ Принудительно завершить", callback_data="mob:force_finish")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -271,12 +275,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not await _guard_message(message):
             return
         is_admin = bool(message.from_user and message.from_user.id == config.admin_id)
-        text = (
-            "Бот активен.\n"
-            "Используйте inline-кнопки ниже.\n\n"
-            "Для публикации новости укажите корректный хештег страны (например #OBS)."
-        )
-        await message.answer(text, reply_markup=_main_menu_keyboard(is_admin))
+        await message.answer(t("bot_active"), reply_markup=_main_menu_keyboard(is_admin))
 
     @router.message(F.text.startswith("/mobilize"))
     async def mobilize_cmd_disabled(message: Message) -> None:
@@ -296,7 +295,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             return
         if action == "anketa":
             await state.clear()
-            await callback.message.answer("Выберите тип регистрации:", reply_markup=_registration_menu_keyboard())
+            await callback.message.answer(t("registration_choose_type"), reply_markup=_registration_menu_keyboard())
             return
         if action == "stats":
             stats_text = await service.render_global_stats()
@@ -338,7 +337,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             if not is_admin:
                 await callback.message.answer("Эта панель доступна только администратору.")
                 return
-            await callback.message.answer("Админ-панель:", reply_markup=_admin_panel_keyboard())
+            await callback.message.answer(t("admin_panel_title"), reply_markup=_admin_panel_keyboard())
             return
 
     @router.callback_query(F.data.startswith("admin:"))
@@ -863,33 +862,64 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if not ok:
             await message.answer(reason)
 
-    return router
-    @router.callback_query(F.data.startswith("mob:type:"))
-    async def mobilization_type_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    @router.callback_query(lambda callback: bool(callback.data and callback.data.startswith("mob:")))
+    async def mobilization_dispatch_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        """Single robust mobilization callback dispatcher.
+
+        Some Telegram clients/logs reported `mob:type:*` as "not handled"; keeping all
+        mobilization buttons behind one prefix handler prevents filter/order misses and
+        still answers every callback explicitly.
+        """
         if not await _guard_callback(callback):
             return
-        mob_type = callback.data.split(":", maxsplit=2)[2]
+        data = callback.data or ""
         user_countries = _user_allowed_countries(callback.from_user.id)
-        if not user_countries and callback.from_user.id != config.admin_id:
-            await callback.answer("Нет страны для мобилизации", show_alert=True)
+        if data != "mob:criteria" and not user_countries and callback.from_user.id != config.admin_id:
+            await callback.answer(t("mobilization_no_country"), show_alert=True)
             return
         country = user_countries[0] if user_countries else "Обоссляндия"
-        await state.set_state(AdminState.waiting_mobilization_amount)
-        await state.update_data(mob_country=country, mob_type=mob_type)
-        profile = config.mobilization_profiles.get(mob_type, {})
-        await callback.message.answer(
-            f"Введите количество для мобилизации типа «{profile.get('label', mob_type)}» "
-            f"({profile.get('min_gain', 0)}-{profile.get('max_gain', 0)})."
-        )
-        await callback.answer()
+
+        if data == "mob:criteria":
+            status = await service.render_mobilization_status(country)
+            await callback.message.answer(status, parse_mode="HTML")
+            await callback.answer()
+            return
+
+        if data == "mob:force_finish":
+            await state.set_state(AdminState.waiting_mobilization_force_reason)
+            await state.update_data(mob_country=country)
+            await callback.message.answer(t("mobilization_force_reason_prompt"))
+            await callback.answer()
+            return
+
+        if data.startswith("mob:type:"):
+            mob_type = data.split(":", maxsplit=2)[2]
+            if mob_type not in config.mobilization_profiles:
+                await callback.answer(t("mobilization_unknown_type"), show_alert=True)
+                return
+            await state.set_state(AdminState.waiting_mobilization_amount)
+            await state.update_data(mob_country=country, mob_type=mob_type)
+            profile = config.mobilization_profiles.get(mob_type, {})
+            await callback.message.answer(
+                t(
+                    "mobilization_amount_prompt",
+                    label=profile.get("label", mob_type),
+                    min_gain=1,
+                    max_gain="сколько нужно",
+                )
+            )
+            await callback.answer()
+            return
+
+        await callback.answer(t("mobilization_unknown_action"), show_alert=True)
 
     @router.message(AdminState.waiting_mobilization_amount)
     async def mobilization_amount_flow(message: Message, state: FSMContext) -> None:
         if not await _guard_message(message):
             return
         raw = (message.text or "").strip()
-        if not re.fullmatch(r"\d{1,4}", raw):
-            await message.answer("Введите число (количество людей).")
+        if not re.fullmatch(r"\d{1,7}", raw):
+            await message.answer("Введите число людей для мобилизации (например: 50).")
             return
         amount = int(raw)
         data = await state.get_data()
@@ -900,3 +930,16 @@ def bind_admin_handlers(service: NewsService) -> Router:
         if ok:
             await message.bot.send_message(config.admin_id, f"📌 Запуск мобилизации\n{country}\n{report}")
         await state.clear()
+
+    @router.message(AdminState.waiting_mobilization_force_reason)
+    async def mobilization_force_reason_flow(message: Message, state: FSMContext) -> None:
+        if not await _guard_message(message):
+            return
+        reason = (message.text or "").strip() or "без причины"
+        data = await state.get_data()
+        country = str(data.get("mob_country", ""))
+        ok, report = await service.force_finish_mobilization(country, reason, message.from_user.id if message.from_user else 0)
+        await message.answer(report)
+        await state.clear()
+
+    return router

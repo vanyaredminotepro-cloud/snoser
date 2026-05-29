@@ -278,9 +278,23 @@ class Database:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS mobilization_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    country TEXT NOT NULL,
+                    mobilization_type TEXT NOT NULL,
+                    requested_amount INTEGER NOT NULL DEFAULT 0,
+                    success INTEGER NOT NULL DEFAULT 0,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS active_research (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    country_id INTEGER NOT NULL,
+                    country_id INTEGER NOT NULL DEFAULT 0,
+                    country TEXT NOT NULL DEFAULT '',
                     tech_id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     category TEXT NOT NULL,
@@ -325,6 +339,10 @@ class Database:
                 )
                 """
             )
+            try:
+                await db.execute("ALTER TABLE active_research ADD COLUMN country TEXT NOT NULL DEFAULT ''")
+            except aiosqlite.OperationalError:
+                pass
             try:
                 await db.execute("ALTER TABLE active_research ADD COLUMN start_message_id INTEGER")
             except aiosqlite.OperationalError:
@@ -620,6 +638,40 @@ class Database:
             )
             await db.commit()
 
+    async def add_military_factories(self, country: str, delta: int) -> int:
+        delta = int(delta)
+        if delta == 0:
+            return await self.get_military_factories(country)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO military_factories (country, factories_count) VALUES (?, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE military_factories SET factories_count = MAX(0, factories_count + ?) WHERE country = ?",
+                (delta, country),
+            )
+            row = await (await db.execute(
+                "SELECT factories_count FROM military_factories WHERE country = ?",
+                (country,),
+            )).fetchone()
+            await db.commit()
+        return int(row[0]) if row else 0
+
+    async def seed_military_factories(self, mapping: dict[str, int]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, count in mapping.items():
+                desired = max(0, int(count))
+                cursor = await db.execute(
+                    "INSERT INTO military_factories (country, factories_count) VALUES (?, ?) "
+                    "ON CONFLICT(country) DO UPDATE SET factories_count = MAX(factories_count, excluded.factories_count)",
+                    (country, desired),
+                )
+                inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
     async def get_country_mobilization(self, country: str) -> tuple[str, int, int, str]:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -708,6 +760,21 @@ class Database:
             (str(r[0]), int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0))
             for r in rows
         ]
+
+    async def add_mobilization_attempt(
+        self,
+        country: str,
+        mobilization_type: str,
+        requested_amount: int,
+        success: bool,
+        details: str,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO mobilization_attempts (country, mobilization_type, requested_amount, success, details) VALUES (?, ?, ?, ?, ?)",
+                (country, mobilization_type, int(requested_amount), 1 if success else 0, details[:500]),
+            )
+            await db.commit()
 
     async def seed_country_stats(self, mapping: dict[str, dict[str, int]]) -> int:
         inserted = 0
@@ -880,6 +947,54 @@ class Database:
             )
             await db.commit()
 
+    async def add_resources_delta(self, country: str, oil_delta: int = 0, metal_delta: int = 0, grain_delta: int = 0) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO economic_resources (country, oil, metal, grain) VALUES (?, 0, 0, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE economic_resources SET "
+                "oil = MAX(0, oil + ?), "
+                "metal = MAX(0, metal + ?), "
+                "grain = MAX(0, grain + ?), "
+                "updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (int(oil_delta), int(metal_delta), int(grain_delta), country),
+            )
+            await db.commit()
+
+    async def seed_economic_resources(self, mapping: dict[str, dict[str, int]]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, payload in mapping.items():
+                cursor = await db.execute(
+                    "INSERT INTO economic_resources (country, oil, metal, grain) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(country) DO UPDATE SET "
+                    "oil = MAX(oil, excluded.oil), "
+                    "metal = MAX(metal, excluded.metal), "
+                    "grain = MAX(grain, excluded.grain), "
+                    "updated_at = CURRENT_TIMESTAMP",
+                    (
+                        country,
+                        max(0, int(payload.get("oil", 0))),
+                        max(0, int(payload.get("metal", 0))),
+                        max(0, int(payload.get("grain", 0))),
+                    ),
+                )
+                inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
+    async def get_country_resources(self, country: str) -> tuple[int, int, int]:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT oil, metal, grain FROM economic_resources WHERE country = ?",
+                (country,),
+            )).fetchone()
+        if not row:
+            return 0, 0, 0
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+
     async def set_daily_missions(self, day_key: str, missions: list[tuple[str, int, int]]) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("DELETE FROM daily_missions WHERE day_key = ?", (day_key,))
@@ -953,7 +1068,7 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             rows = await (await db.execute(
                 """
-                SELECT id, country_id, tech_id, name, category, duration_days, start_date, end_date, start_message_id, effects
+                SELECT id, country_id, country, tech_id, name, category, duration_days, start_date, end_date, start_message_id, effects
                 FROM active_research
                 WHERE status = 'active' AND end_date <= ?
                 ORDER BY end_date ASC
@@ -964,14 +1079,15 @@ class Database:
             {
                 "id": int(r[0]),
                 "country_id": int(r[1]),
-                "tech_id": str(r[2]),
-                "name": str(r[3]),
-                "category": str(r[4]),
-                "duration_days": int(r[5]),
-                "start_date": str(r[6]),
-                "end_date": str(r[7]),
-                "start_message_id": int(r[8]) if r[8] is not None else None,
-                "effects": str(r[9] or "{}"),
+                "country": str(r[2] or ""),
+                "tech_id": str(r[3]),
+                "name": str(r[4]),
+                "category": str(r[5]),
+                "duration_days": int(r[6]),
+                "start_date": str(r[7]),
+                "end_date": str(r[8]),
+                "start_message_id": int(r[9]) if r[9] is not None else None,
+                "effects": str(r[10] or "{}"),
             }
             for r in rows
         ]

@@ -312,4 +312,4 @@ pip install -r web_research/requirements.txt
 python web_research/app.py
 ```
 
-По умолчанию URL: `http://localhost:5000`.
+По умолчанию URL: `https://islam.net`.
