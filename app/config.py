@@ -127,7 +127,7 @@ class Config:
     emoji_storage_path: Path = Path("app/storage/emojis.json")
     port: int = field(default_factory=lambda: _optional_env_int("PORT") or 8080)
     healthcheck_enabled: bool = field(default_factory=lambda: _optional_env_bool("HEALTHCHECK_ENABLED", default=True))
-    web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "http://localhost:5000")
+    web_dashboard_url: str = field(default_factory=lambda: _first_present_env("WEB_DASHBOARD_URL") or "https://islam.net")
     webhook_port: int = field(default_factory=lambda: _optional_env_int("WEBHOOK_PORT") or 8090)
     bot_webhook_secret: str = field(default_factory=lambda: _first_present_env("BOT_WEBHOOK_SECRET") or "dev-secret")
     tg_api_host: str = field(default_factory=lambda: _first_present_env("TG_API_HOST") or "")
