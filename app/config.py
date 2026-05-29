@@ -108,6 +108,7 @@ class Config:
 
     admin_id: int = field(default_factory=lambda: _optional_env_int("ADMIN_ID") or 5006629901)
     admin_username: str = field(default_factory=lambda: _first_present_env("ADMIN_USERNAME") or "@supermegaluti")
+    bot_locale: str = field(default_factory=lambda: (_first_present_env("BOT_LOCALE") or "ru").lower())
 
     target_channel: str = field(default_factory=lambda: _first_present_env("TARGET_CHANNEL") or "@novostnikobosslandia")
     publish_delay_seconds: float = field(default_factory=lambda: float(_first_present_env("PUBLISH_DELAY_SECONDS") or "0.0"))
@@ -235,13 +236,20 @@ class Config:
             "Аборигены": ["#ABR"],
             "ЧВК Пиран": ["#PIR"],
             "Кермания": ["#KK8", "#КК8"],
-            "Новрания": ["#TNR"],
+            "Новрания": ["#NOV", "#TNR"],
             "Коробочкия": ["#KRB"],
             "Северландия": ["#SV"],
             "Зитор": ["#ZT"],
             "СВРО": ["#SVR"],
             "ФШП": ["#FHP"],
             "ONV": ["#ONV"],
+            "ОСР": ["#OSR"],
+            "Пандекстан": ["#PNX"],
+            "Мерцорленд": ["#MR"],
+            "Каризайн": ["#KRZ"],
+            "Смертоградск": ["#SMR"],
+            "Север": ["#SEV"],
+            "ПНТВ": ["#PNTV"],
             "Казербия": ["#KZR"],
             "OV": ["#OV"],
             "Гниляндия": ["#GNL"],
@@ -271,6 +279,11 @@ class Config:
             "ТНР": ["тнр"],
             "ДШРГ Торнадо": ["дшрг торнадо", "торнадо"],
             "Новрания": ["новрания"],
+            "ОСР": ["оср"],
+            "Пандекстан": ["пандекстан", "пандекстане"],
+            "Мерцорленд": ["мерцорленд", "мерцорленде"],
+            "Каризайн": ["каризайн", "каризайна"],
+            "Смертоградск": ["смертоградск", "смертоградска"],
             'Орден "ГНЕВ"': ["гнев", "орден гнев"],
             "Северландия": ["северландия"],
             "Антония": ["антония", "антонская русь"],
@@ -328,6 +341,51 @@ class Config:
             "Зитор": {"army": 137, "budget": 93_000, "citizens": 790, "life_level": 54},
             "Аль-Нуурия": {"army": 90, "budget": 80_000, "citizens": 400, "life_level": 50},
             "Белоярск": {"army": 58, "budget": 65_000, "citizens": 280, "life_level": 49},
+        }
+    )
+
+    initial_military_factories: dict[str, int] = field(
+        default_factory=lambda: {
+            # Сводка из присланного RP-дампа 29.05.2026: построенные/запущенные/начатые военные заводы.
+            "Обоссляндия": 5,
+            "Олбония": 2,
+            "Северландия": 4,
+            "Зитор": 7,
+            "Новрания": 2,
+            'Орден "ГНЕВ"': 3,
+            "Ось-Возмездия": 3,
+            "Вилония": 7,
+            "Аль-Нуурия": 2,
+            "Пандекстан": 4,
+            "Гниляндия": 1,
+            "ОСР": 2,
+            "ДШРГ Торнадо": 1,
+            "Смертоградск": 1,
+            "Антония": 2,
+            "ТНР": 1,
+        }
+    )
+
+    initial_economic_resources: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {
+            # oil/metal/grain условные игровые очки ресурсов, выведенные из новостей о производстве/агро/заводах.
+            "Обоссляндия": {"oil": 20, "metal": 85, "grain": 35},
+            "Олбония": {"oil": 10, "metal": 45, "grain": 20},
+            "Северландия": {"oil": 15, "metal": 70, "grain": 30},
+            "Зитор": {"oil": 20, "metal": 95, "grain": 80},
+            "Новрания": {"oil": 10, "metal": 60, "grain": 25},
+            'Орден "ГНЕВ"': {"oil": 5, "metal": 95, "grain": 10},
+            "Ось-Возмездия": {"oil": 10, "metal": 90, "grain": 15},
+            "Вилония": {"oil": 25, "metal": 95, "grain": 45},
+            "Аль-Нуурия": {"oil": 25, "metal": 45, "grain": 55},
+            "Пандекстан": {"oil": 25, "metal": 70, "grain": 85},
+            "Мерцорленд": {"oil": 20, "metal": 45, "grain": 70},
+            "Гниляндия": {"oil": 5, "metal": 35, "grain": 15},
+            "ОСР": {"oil": 10, "metal": 65, "grain": 25},
+            "ДШРГ Торнадо": {"oil": 5, "metal": 40, "grain": 5},
+            "Смертоградск": {"oil": 5, "metal": 45, "grain": 10},
+            "Антония": {"oil": 20, "metal": 45, "grain": 45},
+            "ТНР": {"oil": 10, "metal": 25, "grain": 35},
         }
     )
 

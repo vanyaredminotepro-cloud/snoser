@@ -317,6 +317,39 @@ class NewsService:
 
         return budget_delta, army_delta, life_delta, citizens_delta
 
+    @staticmethod
+    def _derive_infrastructure_effects(text: str) -> tuple[int, int, int, int]:
+        low = text.lower()
+        factory_delta = 0
+        oil_delta = 0
+        metal_delta = 0
+        grain_delta = 0
+
+        if any(k in low for k in ["завод", "фабрик", "цех", "производств"]):
+            factory_numbers = [
+                int(v)
+                for v in re.findall(
+                    r"\b(\d{1,2})\b[^\n.,;:]{0,40}(?:военн[^\n.,;:]{0,20})?(?:завод|фабрик|цех|производств)",
+                    low,
+                )
+            ]
+            nearby_count = max(factory_numbers, default=1)
+            if any(k in low for k in ["военн", "оруж", "боеприп", "патрон", "брон", "дрон", "снаряж", "техник"]):
+                factory_delta += min(max(nearby_count, 1), 8)
+                metal_delta += 8 + factory_delta * 6
+            else:
+                metal_delta += 5
+
+        if any(k in low for k in ["агро", "пищ", "сельск", "удобр", "зерн", "ферм"]):
+            grain_delta += 10
+        if any(k in low for k in ["аммиак", "топлив", "нефт", "фосфор", "химичес"]):
+            oil_delta += 5
+        if any(k in low for k in ["дорог", "снабж", "инфраструктур", "тцк", "полигон"]):
+            metal_delta += 3
+            grain_delta += 2
+
+        return factory_delta, oil_delta, metal_delta, grain_delta
+
     async def _apply_country_stats_effect(self, post: IncomingPost) -> None:
         if not post.source_country or post.source_country == "MANUAL":
             return
@@ -327,15 +360,28 @@ class NewsService:
         army_delta = int(round(army_delta * freshness))
         life_delta = int(round(life_delta * freshness))
         citizens_delta = int(round(citizens_delta * freshness))
-        if budget_delta == 0 and army_delta == 0 and life_delta == 0 and citizens_delta == 0:
-            return
-        await self.db.apply_country_stats_delta(
-            post.source_country,
-            budget_delta=budget_delta,
-            army_delta=army_delta,
-            life_delta=life_delta,
-            citizens_delta=citizens_delta,
-        )
+        factory_delta, oil_delta, metal_delta, grain_delta = self._derive_infrastructure_effects(post.text or "")
+        factory_delta = int(round(factory_delta * freshness))
+        oil_delta = int(round(oil_delta * freshness))
+        metal_delta = int(round(metal_delta * freshness))
+        grain_delta = int(round(grain_delta * freshness))
+        if budget_delta != 0 or army_delta != 0 or life_delta != 0 or citizens_delta != 0:
+            await self.db.apply_country_stats_delta(
+                post.source_country,
+                budget_delta=budget_delta,
+                army_delta=army_delta,
+                life_delta=life_delta,
+                citizens_delta=citizens_delta,
+            )
+        if factory_delta:
+            await self.db.add_military_factories(post.source_country, factory_delta)
+        if oil_delta or metal_delta or grain_delta:
+            await self.db.add_resources_delta(
+                post.source_country,
+                oil_delta=oil_delta,
+                metal_delta=metal_delta,
+                grain_delta=grain_delta,
+            )
 
     @staticmethod
     def _news_freshness_factor(post: IncomingPost) -> float:

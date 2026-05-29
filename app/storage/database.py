@@ -633,6 +633,38 @@ class Database:
             )
             await db.commit()
 
+    async def add_military_factories(self, country: str, delta: int) -> int:
+        delta = int(delta)
+        if delta == 0:
+            return await self.get_military_factories(country)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO military_factories (country, factories_count) VALUES (?, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE military_factories SET factories_count = MAX(0, factories_count + ?) WHERE country = ?",
+                (delta, country),
+            )
+            row = await (await db.execute(
+                "SELECT factories_count FROM military_factories WHERE country = ?",
+                (country,),
+            )).fetchone()
+            await db.commit()
+        return int(row[0]) if row else 0
+
+    async def seed_military_factories(self, mapping: dict[str, int]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, count in mapping.items():
+                cursor = await db.execute(
+                    "INSERT OR IGNORE INTO military_factories (country, factories_count) VALUES (?, ?)",
+                    (country, max(0, int(count))),
+                )
+                inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
     async def get_country_mobilization(self, country: str) -> tuple[str, int, int, str]:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -907,6 +939,49 @@ class Database:
                 (country, oil, metal, grain),
             )
             await db.commit()
+
+    async def add_resources_delta(self, country: str, oil_delta: int = 0, metal_delta: int = 0, grain_delta: int = 0) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO economic_resources (country, oil, metal, grain) VALUES (?, 0, 0, 0)",
+                (country,),
+            )
+            await db.execute(
+                "UPDATE economic_resources SET "
+                "oil = MAX(0, oil + ?), "
+                "metal = MAX(0, metal + ?), "
+                "grain = MAX(0, grain + ?), "
+                "updated_at = CURRENT_TIMESTAMP WHERE country = ?",
+                (int(oil_delta), int(metal_delta), int(grain_delta), country),
+            )
+            await db.commit()
+
+    async def seed_economic_resources(self, mapping: dict[str, dict[str, int]]) -> int:
+        inserted = 0
+        async with aiosqlite.connect(self.path) as db:
+            for country, payload in mapping.items():
+                cursor = await db.execute(
+                    "INSERT OR IGNORE INTO economic_resources (country, oil, metal, grain) VALUES (?, ?, ?, ?)",
+                    (
+                        country,
+                        max(0, int(payload.get("oil", 0))),
+                        max(0, int(payload.get("metal", 0))),
+                        max(0, int(payload.get("grain", 0))),
+                    ),
+                )
+                inserted += cursor.rowcount or 0
+            await db.commit()
+        return inserted
+
+    async def get_country_resources(self, country: str) -> tuple[int, int, int]:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (await db.execute(
+                "SELECT oil, metal, grain FROM economic_resources WHERE country = ?",
+                (country,),
+            )).fetchone()
+        if not row:
+            return 0, 0, 0
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
 
     async def set_daily_missions(self, day_key: str, missions: list[tuple[str, int, int]]) -> None:
         async with aiosqlite.connect(self.path) as db:

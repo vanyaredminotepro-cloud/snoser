@@ -164,6 +164,10 @@ async def main() -> None:
     logger.info("Country stats seeded from config: %s", stats_seeded)
     extras_seeded = await db.seed_country_extra_metrics(config.initial_country_extra_metrics)
     logger.info("Country extra metrics seeded from config: %s", extras_seeded)
+    factory_seeded = await db.seed_military_factories(config.initial_military_factories)
+    logger.info("Military factories seeded from config: %s", factory_seeded)
+    resources_seeded = await db.seed_economic_resources(config.initial_economic_resources)
+    logger.info("Economic resources seeded from config: %s", resources_seeded)
 
     try:
         runtime = AppRuntime()
