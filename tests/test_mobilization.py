@@ -42,9 +42,9 @@ async def _seed_mob_signal(db: Database, country: str, *, age_hours: int = 1) ->
 def test_mobilization_requirements_block_partial_without_factory(tmp_path: Path):
     async def _run():
         svc, db = await _mk_service(tmp_path)
-        await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
-        await db.set_country_war_status("Вилония", "threat")
-        ok, msg = await svc.attempt_mobilization("Вилония", "partial")
+        await db.seed_country_stats({"Тестландия": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
+        await db.set_country_war_status("Тестландия", "threat")
+        ok, msg = await svc.attempt_mobilization("Тестландия", "partial")
         assert not ok
         assert "Требуется военных заводов" in msg
 
@@ -143,15 +143,17 @@ def test_day4_sync_from_recent_mobilization_news(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_start_mobilization_fails_when_signal_too_old(tmp_path: Path):
+def test_start_mobilization_generates_signal_and_news_without_manual_post(tmp_path: Path):
     async def _run():
         svc, db = await _mk_service(tmp_path)
         await db.seed_country_stats({"Вилония": {"budget": 100000, "army": 100, "citizens": 1000, "life_level": 60}})
         await db.set_country_war_status("Вилония", "peace")
-        await _seed_mob_signal(db, "Вилония", age_hours=24 * 30)
         ok, msg = await svc.start_mobilization("Вилония", "conscription", 5)
-        assert not ok
-        assert "23 дней" in msg
+        assert ok
+        assert "Новость о мобилизации" in msg
+        criteria_ok, criteria_msg = await svc.check_mobilization_news_criteria("Вилония")
+        assert criteria_ok
+        assert "кнопкой мобилизации" in criteria_msg
 
     asyncio.run(_run())
 

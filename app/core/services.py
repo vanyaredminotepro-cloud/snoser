@@ -464,8 +464,10 @@ class NewsService:
         age = int(time.time()) - ts
         if age > self.MOB_SIGNAL_MAX_AGE_SECONDS:
             return False, "Последняя подходящая новость устарела (нужно не старше 23 дней)."
+        if payload.get("generated"):
+            return True, f"Подходит: создано кнопкой мобилизации, давность примерно {max(0, age // 3600)} ч."
         channel = self._normalize_channel_name(str(payload.get("channel", "")))
-        return True, f"Подходит: @{channel}, msg_id={int(payload.get('message_id', 0))}, давность ~{max(0, age // 3600)}ч."
+        return True, f"Подходит: @{channel}, сообщение={int(payload.get('message_id', 0))}, давность примерно {max(0, age // 3600)} ч."
 
     async def render_recent_mobilization_signals(self, country: str, limit: int = 3) -> str:
         raw = await self.db.get_state(f"mob_signal_history:{country}", "[]")
@@ -480,9 +482,12 @@ class NewsService:
         lines = ["Последние сигналы:"]
         for item in history[:max(1, limit)]:
             age = max(0, (int(time.time()) - int(item.get("ts", 0))) // 3600)
-            lines.append(
-                f"• @{self._normalize_channel_name(str(item.get('channel', '')))} | msg:{int(item.get('message_id', 0))} | ~{age}ч назад"
-            )
+            if item.get("generated"):
+                lines.append(f"• создано кнопкой мобилизации | примерно {age} ч назад")
+            else:
+                lines.append(
+                    f"• @{self._normalize_channel_name(str(item.get('channel', '')))} | сообщение: {int(item.get('message_id', 0))} | примерно {age} ч назад"
+                )
         return "\n".join(lines)
 
     @staticmethod
@@ -498,6 +503,67 @@ class NewsService:
         h, rem = divmod(rem, 3600)
         m, s = divmod(rem, 60)
         return f"{d}д {h}ч {m}м {s}с"
+
+
+    @staticmethod
+    def _war_status_ru(status: str) -> str:
+        return {
+            "peace": "мир",
+            "threat": "угроза",
+            "martial_law": "военное положение",
+            "war": "война",
+            "total_war": "тотальная война",
+        }.get(status, status or "мир")
+
+    @classmethod
+    def _war_statuses_ru(cls, statuses: list[str]) -> str:
+        return ", ".join(cls._war_status_ru(s) for s in statuses) if statuses else "любой"
+
+    async def _effective_military_factories(self, country: str) -> int:
+        db_count = await self.db.get_military_factories(country)
+        seed_count = int(config.initial_military_factories.get(country, 0))
+        if seed_count > db_count:
+            await self.db.set_military_factories(country, seed_count)
+            return seed_count
+        return db_count
+
+    async def _remember_generated_mobilization_signal(self, country: str, mob_type: str) -> None:
+        payload = {
+            "country": country,
+            "channel": "кнопка мобилизации",
+            "message_id": 0,
+            "mob_type": mob_type,
+            "generated": True,
+            "ts": int(time.time()),
+        }
+        await self.db.set_state(f"mob_signal:{country}", json.dumps(payload, ensure_ascii=False))
+        raw = await self.db.get_state(f"mob_signal_history:{country}", "[]")
+        try:
+            history = json.loads(raw)
+            if not isinstance(history, list):
+                history = []
+        except Exception:
+            history = []
+        history.insert(0, payload)
+        await self.db.set_state(f"mob_signal_history:{country}", json.dumps(history[:25], ensure_ascii=False))
+
+    async def _publish_mobilization_start_news(self, country: str, mob_type: str, requested_amount: int, finish_dt: datetime) -> bool:
+        profile = config.mobilization_profiles.get(mob_type, {})
+        text = (
+            f"⚔️ <b>{country} начинает мобилизацию</b>\n"
+            f"Тип: <b>{profile.get('label', mob_type)}</b>\n"
+            f"Размер: <b>{requested_amount} человек</b>\n"
+            f"Будет длиться до: <b>{finish_dt.strftime('%d.%m.%Y %H:%M')} по UTC</b>"
+        )
+        try:
+            if self.user_client:
+                await self._send_with_retry(lambda: self._send_to_target_channel(text, parse_mode="html"))
+            else:
+                await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+            return True
+        except Exception:
+            logger.exception("Failed to publish mobilization start news for %s", country)
+            return False
 
     @staticmethod
     def _week_key_utc() -> str:
@@ -541,7 +607,7 @@ class NewsService:
 
         profile = config.mobilization_profiles[requested_type]
         req = profile["requirements"]
-        factories = await self.db.get_military_factories(country)
+        factories = await self._effective_military_factories(country)
         war_status, _ = await self.db.get_country_war_and_risk(country)
 
         min_factories = int(req["factories"])
@@ -549,7 +615,7 @@ class NewsService:
         if factories < min_factories:
             return False, f"Требуется военных заводов: {min_factories}, сейчас: {factories}."
         if allowed_statuses and war_status not in allowed_statuses:
-            return False, f"Требуется один из статусов: {', '.join(allowed_statuses)}. Сейчас: {war_status}."
+            return False, f"Требуется один из статусов: {self._war_statuses_ru(allowed_statuses)}. Сейчас: {self._war_status_ru(war_status)}."
 
         gained, used, weekly_limit = await self.calculate_mobilization_gain(country, requested_type)
         week_key = self._week_key_utc()
@@ -613,7 +679,7 @@ class NewsService:
 
     async def render_mobilization_status(self, country: str) -> str:
         mob_type, used, weekly_limit, week_key = await self.db.get_country_mobilization(country)
-        factories = await self.db.get_military_factories(country)
+        factories = await self._effective_military_factories(country)
         war_status, risk = await self.db.get_country_war_and_risk(country)
         plan_raw = await self.db.get_state(f"mobplan:{country}", "")
         active = False
@@ -632,10 +698,9 @@ class NewsService:
             f"План недели: <b>{target if target > 0 else 'не выбран'}</b> ({'активен' if active else 'не активен'})",
             f"Неделя: <i>{week_key or self._week_key_utc()}</i>",
             f"Военные заводы: <b>{factories}</b>",
-            f"Статус войны: <b>{war_status}</b>, риск: <b>{risk}</b>",
+            f"Статус войны: <b>{self._war_status_ru(war_status)}</b>, риск: <b>{risk}</b>",
             "",
-            f"{'✅' if (await self.check_mobilization_news_criteria(country))[0] else '❌'} "
-            f"Критерии: {(await self.check_mobilization_news_criteria(country))[1]}",
+            "✅ Критерии: подтверждающая новость создаётся автоматически кнопкой мобилизации.",
             await self.render_recent_mobilization_signals(country),
             "",
             "<b>Доступные типы:</b>",
@@ -643,8 +708,8 @@ class NewsService:
         for key, profile in config.mobilization_profiles.items():
             req = profile["requirements"]
             lines.append(
-                f"• <b>{profile['label']}</b> — {profile['min_gain']}-{profile['max_gain']}/нед, "
-                f"заводы>={req['factories']}, статусы: {', '.join(req['war_status']) if req['war_status'] else 'любой'}"
+                f"• <b>{profile['label']}</b> — {profile['min_gain']}-{profile['max_gain']} в неделю, "
+                f"военных заводов не меньше {req['factories']}, статусы: {self._war_statuses_ru([str(s) for s in req['war_status']])}"
             )
         return "\n".join(lines)
 
@@ -658,18 +723,13 @@ class NewsService:
             return False, f"Для этого типа доступно от {min_gain} до {max_gain} чел. в неделю."
 
         req = profile["requirements"]
-        factories = await self.db.get_military_factories(country)
+        factories = await self._effective_military_factories(country)
         war_status, _ = await self.db.get_country_war_and_risk(country)
         if factories < int(req["factories"]):
             return False, f"Нужно военных заводов: {req['factories']}, сейчас: {factories}."
         statuses = [str(s) for s in req["war_status"]]
         if statuses and war_status not in statuses:
-            return False, f"Нужен статус: {', '.join(statuses)}. Сейчас: {war_status}."
-        criteria_ok, criteria_msg = await self.check_mobilization_news_criteria(country)
-        if not criteria_ok:
-            await self.db.add_mobilization_attempt(country, mob_type, requested_amount, False, criteria_msg)
-            return False, f"Критерии мобилизации не выполнены. {criteria_msg}"
-
+            return False, f"Нужен статус: {self._war_statuses_ru(statuses)}. Сейчас: {self._war_status_ru(war_status)}."
         week_key = self._week_key_utc()
         plan_key = f"mobplan:{country}"
         plan_raw = await self.db.get_state(plan_key, "")
@@ -698,12 +758,15 @@ class NewsService:
         await self.db.update_country_mobilization(country, mob_type, 0, requested_amount, week_key, int(time.time()))
         left = self._seconds_until_week_end()
         finish_dt = datetime.now(timezone.utc) + timedelta(seconds=left)
-        await self.db.add_mobilization_attempt(country, mob_type, requested_amount, True, "start_ok")
+        await self._remember_generated_mobilization_signal(country, mob_type)
+        announcement_sent = await self._publish_mobilization_start_news(country, mob_type, requested_amount, finish_dt)
+        await self.db.add_mobilization_attempt(country, mob_type, requested_amount, True, "start_ok_generated_news")
         return (
             True,
-            f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} чел/нед.\n"
+            f"✅ Запущена мобилизация: {profile['label']} на {requested_amount} человек в неделю.\n"
+            f"📰 Новость о мобилизации: {'опубликована автоматически' if announcement_sent else 'создана, но не смогла отправиться в канал'}\n"
             f"⏱ Длительность: {self._format_duration(left)}\n"
-            f"📅 Завершится: {finish_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            f"📅 Завершится: {finish_dt.strftime('%d.%m.%Y %H:%M')} по UTC",
         )
 
     async def force_finish_mobilization(self, country: str, reason: str, actor_id: int) -> tuple[bool, str]:

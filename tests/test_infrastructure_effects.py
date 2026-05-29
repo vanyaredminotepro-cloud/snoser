@@ -42,6 +42,7 @@ def test_config_seeds_factories_and_resources(tmp_path: Path):
     async def _run() -> None:
         db = Database(str(tmp_path / "seed.sqlite3"))
         await db.init()
+        await db.set_military_factories("Вилония", 1)
         await db.seed_military_factories({"Вилония": 7})
         await db.seed_economic_resources({"Вилония": {"oil": 25, "metal": 95, "grain": 45}})
 

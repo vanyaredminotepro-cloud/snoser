@@ -657,9 +657,11 @@ class Database:
         inserted = 0
         async with aiosqlite.connect(self.path) as db:
             for country, count in mapping.items():
+                desired = max(0, int(count))
                 cursor = await db.execute(
-                    "INSERT OR IGNORE INTO military_factories (country, factories_count) VALUES (?, ?)",
-                    (country, max(0, int(count))),
+                    "INSERT INTO military_factories (country, factories_count) VALUES (?, ?) "
+                    "ON CONFLICT(country) DO UPDATE SET factories_count = MAX(factories_count, excluded.factories_count)",
+                    (country, desired),
                 )
                 inserted += cursor.rowcount or 0
             await db.commit()
@@ -961,7 +963,12 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             for country, payload in mapping.items():
                 cursor = await db.execute(
-                    "INSERT OR IGNORE INTO economic_resources (country, oil, metal, grain) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO economic_resources (country, oil, metal, grain) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(country) DO UPDATE SET "
+                    "oil = MAX(oil, excluded.oil), "
+                    "metal = MAX(metal, excluded.metal), "
+                    "grain = MAX(grain, excluded.grain), "
+                    "updated_at = CURRENT_TIMESTAMP",
                     (
                         country,
                         max(0, int(payload.get("oil", 0))),

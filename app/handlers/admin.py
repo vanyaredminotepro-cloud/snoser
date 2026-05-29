@@ -897,11 +897,6 @@ def bind_admin_handlers(service: NewsService) -> Router:
             if mob_type not in config.mobilization_profiles:
                 await callback.answer(t("mobilization_unknown_type"), show_alert=True)
                 return
-            criteria_ok, criteria_msg = await service.check_mobilization_news_criteria(country)
-            if not criteria_ok:
-                await callback.message.answer(t("mobilization_blocked", reason=criteria_msg))
-                await callback.answer()
-                return
             await state.set_state(AdminState.waiting_mobilization_amount)
             await state.update_data(mob_country=country, mob_type=mob_type)
             profile = config.mobilization_profiles.get(mob_type, {})
