@@ -367,7 +367,8 @@ class NewsFormatter:
         country_prep = self._country_prepositional(country_title)
 
         # Specific known mistakes from Warlord RP posts and their generic form.
-        out = re.sub(r"(?i)\bв\s+обоссляндии\b", "В Обоссляндии", out)
+        out = re.sub(r"(?i)^\s*в\s+обоссляндии\b", "В Обоссляндии", out)
+        out = re.sub(r"(?i)\bв\s+обоссляндии\b", "в Обоссляндии", out)
         out = re.sub(rf"(?i)^\s*{re.escape(country_title)}\s+мы\s+начинаем\b", f"{country_title} начинает", out)
 
         # Replace local/first-person references with the resolved country name.
@@ -467,31 +468,27 @@ class NewsFormatter:
         return False
 
     def _normalize_sentence_case(self, text: str) -> str:
+        """Capitalize sentence starts without lowercasing proper names.
+
+        Older formatting lowercased every token except the first one, which broke
+        city names and other proper nouns.  This method only uppercases the first
+        alphabetic character after a sentence boundary and preserves the rest.
+        """
         if not text:
             return text
-        parts = re.split(r"([.!?]\s+)", text)
-        out: list[str] = []
-        for part in parts:
-            if not part:
+        result: list[str] = []
+        capitalize_next = True
+        for char in text.strip():
+            if capitalize_next and char.isalpha():
+                result.append(char.upper())
+                capitalize_next = False
                 continue
-            if re.fullmatch(r"[.!?]\s+", part):
-                out.append(part)
-                continue
-            tokens = part.split()
-            if not tokens:
-                out.append(part)
-                continue
-            normalized = []
-            for idx, tok in enumerate(tokens):
-                if tok.startswith("#") or tok.isupper():
-                    normalized.append(tok)
-                    continue
-                if idx == 0:
-                    normalized.append(tok[:1].upper() + tok[1:].lower())
-                else:
-                    normalized.append(tok.lower())
-            out.append(" ".join(normalized))
-        return "".join(out).strip()
+            result.append(char)
+            if char in ".!?\n":
+                capitalize_next = True
+            elif not char.isspace():
+                capitalize_next = False
+        return "".join(result).strip()
 
     def _subjectify_if_possible(self, country: str, text: str, aliases: list[str] | None = None) -> tuple[str, str]:
         compact = text.strip()
@@ -510,13 +507,21 @@ class NewsFormatter:
             return self._split_country_and_body(country, compact, aliases)
         verb = self.verb_replacements.get(verb_raw, verb_raw)
         body = f"{verb} {rest}".strip()
-        body = self._normalize_sentence_case(body)
-        return subject_raw, body
+        return subject_raw, self._lower_initial_news_verb(body)
 
     @staticmethod
     def _is_feminine_subject(subject: str) -> bool:
         low = subject.strip().lower()
         return low.endswith(("ия", "а", "я", "ь"))
+
+    def _lower_initial_news_verb(self, text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return stripped
+        first = stripped.split(maxsplit=1)[0].lower().strip(',.;:!?«»"\'')
+        if first in set(self.verb_replacements.values()):
+            return stripped[:1].lower() + stripped[1:]
+        return stripped
 
     def _normalize_official_body(self, subject: str, body: str) -> str:
         compact = body.strip()
@@ -535,7 +540,7 @@ class NewsFormatter:
             compact = re.sub(r"(?i)\bсоздали\b", "создает", compact, count=1)
             compact = re.sub(r"(?i)\bсозда[её]м\b", "создает", compact, count=1)
 
-        return self._normalize_sentence_case(compact)
+        return self._lower_initial_news_verb(self._normalize_sentence_case(compact))
 
     def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()

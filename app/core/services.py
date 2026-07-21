@@ -1664,6 +1664,10 @@ class NewsService:
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
         corrected = self._humanize_text_variation(corrected)
+        if post.source_country:
+            # Apply the same country-centered news rewrite before filters and
+            # moderation, not only at final publication time.
+            corrected = self.formatter.rewrite(post.source_country, corrected)
         await self.remember_mobilization_signal(post, corrected)
         age_h = self._news_age_hours(post)
         if age_h > 168:
@@ -1856,16 +1860,25 @@ class NewsService:
 
         reply_markup = moderation_keyboard(token, review_mode=review_mode)
         if post.has_media and post.media_file_id:
-            if post.media_type == "photo":
-                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            elif post.media_type == "video":
-                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            elif post.media_type == "animation":
-                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            else:
-                await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
-        else:
-            await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
+            try:
+                if post.media_type == "photo":
+                    await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+                if post.media_type == "video":
+                    await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+                if post.media_type == "animation":
+                    await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+            except TelegramBadRequest:
+                logger.warning(
+                    "Moderation media preview failed for %s/%s; sending text-only review card",
+                    post.source_channel,
+                    post.message_id,
+                    exc_info=True,
+                )
+                msg_text += "\n\n⚠️ Медиа пришло из Telethon-источника и не может быть отправлено Bot API как file_id. Проверьте оригинал по ссылке источника."
+        await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))
