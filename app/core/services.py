@@ -70,6 +70,66 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    @staticmethod
+    def _normalize_source_handle(handle: str) -> str:
+        return (handle or "").strip().lower().lstrip("@").removeprefix("https://t.me/")
+
+    def resolve_source_country(self, handle: str, title: str = "") -> str | None:
+        """Resolve a Telegram source by username first, then by channel title.
+
+        This keeps the Warlord RP channel map deterministic, but still catches
+        renamed/new channels when their visible title contains a known country or
+        alias. Unknown channels are sent to admin binding instead of being posted.
+        """
+        normalized = self._normalize_source_handle(handle)
+        for country, source in config.source_channels.items():
+            if self._normalize_source_handle(str(source)) == normalized:
+                return country
+
+        title_low = (title or "").lower().replace("ё", "е")
+        for country, aliases in config.country_aliases.items():
+            probes = [country, *aliases]
+            if any(probe.lower().replace("ё", "е") in title_low for probe in probes):
+                return country
+        return None
+
+    async def request_source_binding(self, username: str, title: str, message_id: int) -> None:
+        """Ask the admin to bind an unknown source channel and avoid spam prompts.
+
+        The selected binding is stored by the admin callback in cfg:source_channels,
+        so the next messages from the same channel are resolved automatically.
+        """
+        handle = username.lower().lstrip("@")
+        if not handle:
+            return
+        pending_key = f"source_binding:pending:{handle}"
+        if await self.db.get_state(pending_key, ""):
+            return
+        await self.db.set_state(pending_key, str(int(time.time())))
+        countries = list(config.country_hashtags.keys())[:24]
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            [InlineKeyboardButton(text=country, callback_data=f"srcbind:{handle}:{idx}")]
+            for idx, country in enumerate(countries)
+        ]
+        await self.db.set_state(
+            f"source_binding:countries:{handle}",
+            json.dumps(countries, ensure_ascii=False),
+        )
+        message = (
+            "⚙️ Не распознан источник новостей. Выберите страну для привязки:\n"
+            f"Канал: @{handle}\n"
+            f"Название: {title or 'без названия'}\n"
+            f"Сообщение: https://t.me/{handle}/{message_id}"
+        )
+        await self.bot.send_message(
+            config.admin_id,
+            message,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        logger.warning("Requested admin source binding for @%s (%s)", handle, title)
+
     def _target_reply_to(self, reply_to: int | None = None) -> int | None:
         """Return the message id used by Telegram forum topics for threaded posts.
 

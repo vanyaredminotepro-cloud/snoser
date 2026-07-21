@@ -281,6 +281,28 @@ def bind_admin_handlers(service: NewsService) -> Router:
     async def mobilize_cmd_disabled(message: Message) -> None:
         await message.answer("Команда отключена. Используйте кнопку «⚔️ Мобилизация» в меню.")
 
+    @router.callback_query(F.data.startswith("srcbind:"))
+    async def source_binding_callback(callback: CallbackQuery) -> None:
+        """Persist admin-selected country binding for an unknown source channel."""
+        if callback.from_user.id != config.admin_id:
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        _, handle, idx_raw = (callback.data or "").split(":", maxsplit=2)
+        raw_countries = await service.db.get_state(f"source_binding:countries:{handle}", "[]")
+        try:
+            countries = json.loads(raw_countries)
+            country = str(countries[int(idx_raw)])
+        except (ValueError, IndexError, TypeError, json.JSONDecodeError):
+            await callback.answer("Привязка устарела", show_alert=True)
+            return
+        config.source_channels[country] = handle
+        await service.db.set_state("cfg:source_channels", json.dumps(config.source_channels, ensure_ascii=False))
+        await service.db.set_state(f"source_binding:pending:{handle}", "")
+        await callback.answer("Источник привязан")
+        if callback.message:
+            await callback.message.answer(f"✅ @{handle} привязан к стране: {country}")
+        logger.info("Admin bound source @%s to country %s", handle, country)
+
     @router.callback_query(F.data.startswith("menu:"))
     async def menu_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _guard_callback(callback):

@@ -355,19 +355,57 @@ class NewsFormatter:
         return text, list(dict.fromkeys(tags))
 
     def rewrite(self, country: str, text: str) -> str:
-        out = text
-        country_prep = self._country_prepositional(country)
-        out = re.sub(r"(?i)\bв\s+нашей\s+стране\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bв\s+нашем\s+государстве\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bв\s+нашей\s+республике\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bнаша\s+страна\b", country, out)
-        out = re.sub(r"(?i)\bнаше\s+государство\b", country, out)
+        """Convert conversational source text into neutral RP news style.
 
-        if out.strip().lower().startswith("мы "):
-            return out
-        if out.lower().startswith(country.lower()):
-            return out
-        return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", out, flags=re.IGNORECASE)
+        Channel posts often use first-person wording ("мы начинаем",
+        "нашей республики"). The formatter normalizes such fragments before
+        entity rendering so every publication in the topic is written from the
+        country/news-agency perspective and not from a personal account.
+        """
+        country_title = country[:1].upper() + country[1:]
+        out = (text or "").strip()
+        country_prep = self._country_prepositional(country_title)
+
+        # Specific known mistakes from Warlord RP posts and their generic form.
+        out = re.sub(r"(?i)\bв\s+обоссляндии\b", "В Обоссляндии", out)
+        out = re.sub(rf"(?i)^\s*{re.escape(country_title)}\s+мы\s+начинаем\b", f"{country_title} начинает", out)
+
+        # Replace local/first-person references with the resolved country name.
+        replacements = {
+            r"\bв\s+нашей\s+стране\b": f"в {country_prep}",
+            r"\bв\s+нашем\s+государстве\b": f"в {country_prep}",
+            r"\bв\s+нашей\s+республике\b": f"в {country_prep}",
+            r"\bнаша\s+страна\b": country_title,
+            r"\bнаше\s+государство\b": country_title,
+            r"\bнаша\s+республика\b": country_title,
+        }
+        for pattern, value in replacements.items():
+            out = re.sub(pattern, value, out, flags=re.IGNORECASE)
+
+        verb_pattern = "|".join(map(re.escape, sorted(self.verb_replacements, key=len, reverse=True)))
+
+        def replace_we_verb(match: re.Match) -> str:
+            verb = match.group(1).lower()
+            replacement = self.verb_replacements.get(verb, verb)
+            return f"{country_title} {replacement}"
+
+        # "мы начинаем" -> "Страна начинает" everywhere, including after a
+        # duplicated country prefix from source text.
+        out = re.sub(rf"(?i)\bмы\s+({verb_pattern})\b", replace_we_verb, out)
+        out = re.sub(rf"(?i)^\s*{re.escape(country_title)}\s+{re.escape(country_title)}\s+", f"{country_title} ", out)
+
+        # Drop remaining personal possessives to keep an informational tone.
+        out = re.sub(
+            r"(?i)\b(моя|моё|мое|мой|моего|моей|мою|моих|моим|моими|наша|наше|наш|нашего|нашей|нашу|наших|нашим|нашими)\b\s*",
+            "",
+            out,
+        )
+        out = re.sub(r"(?i)\b(дорогие друзья|ребята|всем привет|с уважением)\b[:,!\s-]*", "", out)
+        out = re.sub(r"\s{2,}", " ", out).strip()
+        normalized = self._normalize_sentence_case(out)
+        normalized = re.sub(rf"(?i)\b{re.escape(country_title)}\b", country_title, normalized)
+        normalized = re.sub(rf"(?i)\b{re.escape(country_prep)}\b", country_prep, normalized)
+        return normalized
 
     @staticmethod
     def _country_prepositional(country: str) -> str:
@@ -636,11 +674,10 @@ class NewsFormatter:
         aliases = (country_aliases or {}).get(country, [])
         subject, body = self._subjectify_if_possible(country, cleaned, aliases)
         body = self._normalize_official_body(subject, body)
-        if self._body_mentions_country(body, country, aliases):
-            subject = ""
+        # The rendered headline always starts with the resolved country name so
+        # the country can be bolded consistently even when the body also mentions it.
         headline, details = self._split_headline_details(body)
-        include_subject = not self._contains_country_reference(body, country, aliases)
-        visible_subject = subject if include_subject else ""
+        visible_subject = (subject or country).strip()
 
         emoji_char, emoji_id = self._emoji_char_and_id(headline, premium_emoji_ids)
 

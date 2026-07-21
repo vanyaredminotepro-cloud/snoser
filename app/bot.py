@@ -152,11 +152,6 @@ class AppRuntime:
         scheduler_task = asyncio.create_task(service.scheduler_worker())
         rss_task = asyncio.create_task(service.rss_worker())
 
-        source_by_username = {
-            v.lower().lstrip("@"): k
-            for k, v in config.source_channels.items()
-            if not v.startswith("+")
-        }
         invite_only_sources = {
             k: v for k, v in config.source_channels.items() if v.startswith("+")
         }
@@ -174,11 +169,12 @@ class AppRuntime:
 
             channel = await event.get_chat()
             username = str(getattr(channel, "username", "") or "").lower()
-            country = source_by_username.get(username)
+            title = getattr(channel, "title", None) or getattr(channel, "username", "unknown")
+            country = service.resolve_source_country(username, str(title))
             if not country:
+                await service.request_source_binding(username, str(title), event.message.id)
                 return
 
-            title = getattr(channel, "title", None) or getattr(channel, "username", "unknown")
             media_file_id, media_type = _extract_media_metadata(event.message)
             post = IncomingPost(
                 source_country=country,
