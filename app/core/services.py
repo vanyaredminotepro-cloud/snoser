@@ -70,6 +70,75 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    @staticmethod
+    def _normalize_source_handle(handle: str) -> str:
+        return (handle or "").strip().lower().lstrip("@").removeprefix("https://t.me/")
+
+    def resolve_source_country(self, handle: str, title: str = "") -> str | None:
+        """Resolve a Telegram source by username first, then by channel title.
+
+        This keeps the Warlord RP channel map deterministic, but still catches
+        renamed/new channels when their visible title contains a known country or
+        alias. Unknown channels are sent to admin binding instead of being posted.
+        """
+        normalized = self._normalize_source_handle(handle)
+        for country, source in config.source_channels.items():
+            if self._normalize_source_handle(str(source)) == normalized:
+                return country
+
+        title_low = (title or "").lower().replace("ё", "е")
+        for country, aliases in config.country_aliases.items():
+            probes = [country, *aliases]
+            if any(probe.lower().replace("ё", "е") in title_low for probe in probes):
+                return country
+        return None
+
+    async def request_source_binding(self, username: str, title: str, message_id: int) -> None:
+        """Ask the admin to bind an unknown source channel and avoid spam prompts.
+
+        The selected binding is stored by the admin callback in cfg:source_channels,
+        so the next messages from the same channel are resolved automatically.
+        """
+        handle = username.lower().lstrip("@")
+        if not handle:
+            return
+        pending_key = f"source_binding:pending:{handle}"
+        if await self.db.get_state(pending_key, ""):
+            return
+        await self.db.set_state(pending_key, str(int(time.time())))
+        countries = list(config.country_hashtags.keys())[:24]
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            [InlineKeyboardButton(text=country, callback_data=f"srcbind:{handle}:{idx}")]
+            for idx, country in enumerate(countries)
+        ]
+        await self.db.set_state(
+            f"source_binding:countries:{handle}",
+            json.dumps(countries, ensure_ascii=False),
+        )
+        message = (
+            "⚙️ Не распознан источник новостей. Выберите страну для привязки:\n"
+            f"Канал: @{handle}\n"
+            f"Название: {title or 'без названия'}\n"
+            f"Сообщение: https://t.me/{handle}/{message_id}"
+        )
+        await self.bot.send_message(
+            config.admin_id,
+            message,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        logger.warning("Requested admin source binding for @%s (%s)", handle, title)
+
+    def _target_reply_to(self, reply_to: int | None = None) -> int | None:
+        """Return the message id used by Telegram forum topics for threaded posts.
+
+        In Telegram supergroups with topics, Telethon publishes into a topic by
+        replying to the topic starter/root message.  Per-call reply targets still
+        take precedence for normal threaded replies.
+        """
+        return reply_to if reply_to is not None else config.target_topic_id
+
     async def _send_to_target_channel(
         self,
         text: str,
@@ -79,22 +148,24 @@ class NewsService:
         reply_to: int | None = None,
     ) -> bool:
         if not self.user_client:
-            logger.warning("Target channel publish skipped: user session is not connected yet.")
+            logger.warning("Target topic publish skipped: user session is not connected yet.")
             return False
+        target_reply_to = self._target_reply_to(reply_to)
         if formatting_entities is not None:
             await self.user_client.send_message(
                 config.target_channel,
                 text,
                 formatting_entities=formatting_entities,
-                reply_to=reply_to,
+                reply_to=target_reply_to,
             )
         else:
             await self.user_client.send_message(
                 config.target_channel,
                 text,
                 parse_mode=parse_mode,
-                reply_to=reply_to,
+                reply_to=target_reply_to,
             )
+        logger.info("Sent text publication to %s topic=%s", config.target_channel, target_reply_to)
         return True
 
     async def load_dynamic_config(self) -> None:
@@ -621,7 +692,7 @@ class NewsService:
             if self.user_client:
                 await self._send_with_retry(lambda: self._send_to_target_channel(text, parse_mode="html"))
             else:
-                await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+                await self.bot.send_message(config.target_channel, text, parse_mode="HTML", message_thread_id=config.target_topic_id)
             return True
         except Exception:
             logger.exception("Failed to publish mobilization start news for %s", country)
@@ -1593,6 +1664,10 @@ class NewsService:
         corrected = self._summarize_if_huge(post, corrected)
         corrected = self._extract_special_markers(corrected)
         corrected = self._humanize_text_variation(corrected)
+        if post.source_country:
+            # Apply the same country-centered news rewrite before filters and
+            # moderation, not only at final publication time.
+            corrected = self.formatter.rewrite(post.source_country, corrected)
         await self.remember_mobilization_signal(post, corrected)
         age_h = self._news_age_hours(post)
         if age_h > 168:
@@ -1729,7 +1804,12 @@ class NewsService:
             await self._wait_human_publish_delay()
             if self.user_client and post.media_file_id:
                 await self._send_with_retry(
-                    lambda: self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                    lambda: self.user_client.send_file(
+                        config.target_channel,
+                        file=post.media_file_id,
+                        caption=caption[:1024],
+                        reply_to=self._target_reply_to(),
+                    )
                 )
             else:
                 logger.warning("Skipping media publish %s/%s until user session connects.", post.source_channel, post.message_id)
@@ -1780,16 +1860,25 @@ class NewsService:
 
         reply_markup = moderation_keyboard(token, review_mode=review_mode)
         if post.has_media and post.media_file_id:
-            if post.media_type == "photo":
-                await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            elif post.media_type == "video":
-                await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            elif post.media_type == "animation":
-                await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
-            else:
-                await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
-        else:
-            await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
+            try:
+                if post.media_type == "photo":
+                    await self.bot.send_photo(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+                if post.media_type == "video":
+                    await self.bot.send_video(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+                if post.media_type == "animation":
+                    await self.bot.send_animation(config.admin_id, post.media_file_id, caption=msg_text[:1024], reply_markup=reply_markup)
+                    return
+            except TelegramBadRequest:
+                logger.warning(
+                    "Moderation media preview failed for %s/%s; sending text-only review card",
+                    post.source_channel,
+                    post.message_id,
+                    exc_info=True,
+                )
+                msg_text += "\n\n⚠️ Медиа пришло из Telethon-источника и не может быть отправлено Bot API как file_id. Проверьте оригинал по ссылке источника."
+        await self.bot.send_message(config.admin_id, msg_text, reply_markup=reply_markup)
 
     async def cleanup_runtime_files(self) -> None:
         logs = list(Path(config.logs_dir).glob("*.log.*"))

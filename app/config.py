@@ -53,6 +53,13 @@ def _optional_env_int(*names: str) -> Optional[int]:
         raise RuntimeError(f"Environment variable {names_str} must be an integer") from exc
 
 
+
+def _optional_env_chat_id(*names: str) -> str | int | None:
+    raw = _first_present_env(*names)
+    if raw is None:
+        return None
+    return int(raw) if raw.lstrip("-").isdigit() else raw
+
 def _optional_env_bool(*names: str, default: bool = False) -> bool:
     raw = _first_present_env(*names)
     if raw is None:
@@ -110,7 +117,8 @@ class Config:
     admin_username: str = field(default_factory=lambda: _first_present_env("ADMIN_USERNAME") or "@supermegaluti")
     bot_locale: str = field(default_factory=lambda: (_first_present_env("BOT_LOCALE") or "ru").lower())
 
-    target_channel: str = field(default_factory=lambda: _first_present_env("TARGET_CHANNEL") or "@novostnikobosslandia")
+    target_channel: str | int = field(default_factory=lambda: _optional_env_chat_id("TARGET_CHAT_ID", "TARGET_GROUP_ID", "TARGET_CHANNEL") or -1002446986804)
+    target_topic_id: int | None = field(default_factory=lambda: _optional_env_int("TARGET_TOPIC_ID", "NEWS_TOPIC_ID") or 65881)
     publish_delay_seconds: float = field(default_factory=lambda: float(_first_present_env("PUBLISH_DELAY_SECONDS") or "0.0"))
     queue_ingest_delay_min: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MIN") or 2.0)
     queue_ingest_delay_max: float = field(default_factory=lambda: _optional_env_float("QUEUE_INGEST_DELAY_MAX") or 5.0)
@@ -158,23 +166,17 @@ class Config:
 
     source_channels: dict[str, str] = field(
         default_factory=lambda: {
-            "Антония": "antoniats",
-            "Вилония": "Viloniarp",
-            "ТНР": "NARallies",
-            "ОСР": "OSRres",
-            "Олбония": "olbonia",
-            "Северландия": "severlandia",
-            "Обоссляндия": "obosslandia",
-            "Зитор": "Zitorchik",
             "Сэрландия": "NewSerland",
-            "ДШРГ Торнадо": "DSHRGTornado",
-            'ЧВК "Компф"': "PMC_Kompf",
-            'Орден "ГНЕВ"': "gnevto",
-            "Лорд-протекторат": "Lord_Protektorat",
-            "ФШП": "pexicoRP",
-            "Белоярск": "BEIOYRSK",
-            "Аль-Нуурия": "djdjsjsjjiw",
-            "Крелония": "+KYJZpV6_i0dlYmQy",
+            "Warlord RP": "warlord_rp",
+            "Империя Орла": "IMPERIA_ORLA",
+            "Вахабилл": "vahabill",
+            "Антония": "antoniats",
+            "Зитор": "Zitorchik",
+            "ТНР": "NARallies",
+            "Северландия": "severlandiawl",
+            "ДШРГ Ратич": "dshrgratich",
+            "MOSSOM": "MOSSOM1",
+            "Обоссляндия": "obosslandia",
         }
     )
 

@@ -355,19 +355,58 @@ class NewsFormatter:
         return text, list(dict.fromkeys(tags))
 
     def rewrite(self, country: str, text: str) -> str:
-        out = text
-        country_prep = self._country_prepositional(country)
-        out = re.sub(r"(?i)\bв\s+нашей\s+стране\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bв\s+нашем\s+государстве\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bв\s+нашей\s+республике\b", f"в {country_prep}", out)
-        out = re.sub(r"(?i)\bнаша\s+страна\b", country, out)
-        out = re.sub(r"(?i)\bнаше\s+государство\b", country, out)
+        """Convert conversational source text into neutral RP news style.
 
-        if out.strip().lower().startswith("мы "):
-            return out
-        if out.lower().startswith(country.lower()):
-            return out
-        return re.sub(r"\bмы\s+([а-яa-z]+)", f"{country} \\1", out, flags=re.IGNORECASE)
+        Channel posts often use first-person wording ("мы начинаем",
+        "нашей республики"). The formatter normalizes such fragments before
+        entity rendering so every publication in the topic is written from the
+        country/news-agency perspective and not from a personal account.
+        """
+        country_title = country[:1].upper() + country[1:]
+        out = (text or "").strip()
+        country_prep = self._country_prepositional(country_title)
+
+        # Specific known mistakes from Warlord RP posts and their generic form.
+        out = re.sub(r"(?i)^\s*в\s+обоссляндии\b", "В Обоссляндии", out)
+        out = re.sub(r"(?i)\bв\s+обоссляндии\b", "в Обоссляндии", out)
+        out = re.sub(rf"(?i)^\s*{re.escape(country_title)}\s+мы\s+начинаем\b", f"{country_title} начинает", out)
+
+        # Replace local/first-person references with the resolved country name.
+        replacements = {
+            r"\bв\s+нашей\s+стране\b": f"в {country_prep}",
+            r"\bв\s+нашем\s+государстве\b": f"в {country_prep}",
+            r"\bв\s+нашей\s+республике\b": f"в {country_prep}",
+            r"\bнаша\s+страна\b": country_title,
+            r"\bнаше\s+государство\b": country_title,
+            r"\bнаша\s+республика\b": country_title,
+        }
+        for pattern, value in replacements.items():
+            out = re.sub(pattern, value, out, flags=re.IGNORECASE)
+
+        verb_pattern = "|".join(map(re.escape, sorted(self.verb_replacements, key=len, reverse=True)))
+
+        def replace_we_verb(match: re.Match) -> str:
+            verb = match.group(1).lower()
+            replacement = self.verb_replacements.get(verb, verb)
+            return f"{country_title} {replacement}"
+
+        # "мы начинаем" -> "Страна начинает" everywhere, including after a
+        # duplicated country prefix from source text.
+        out = re.sub(rf"(?i)\bмы\s+({verb_pattern})\b", replace_we_verb, out)
+        out = re.sub(rf"(?i)^\s*{re.escape(country_title)}\s+{re.escape(country_title)}\s+", f"{country_title} ", out)
+
+        # Drop remaining personal possessives to keep an informational tone.
+        out = re.sub(
+            r"(?i)\b(моя|моё|мое|мой|моего|моей|мою|моих|моим|моими|наша|наше|наш|нашего|нашей|нашу|наших|нашим|нашими)\b\s*",
+            "",
+            out,
+        )
+        out = re.sub(r"(?i)\b(дорогие друзья|ребята|всем привет|с уважением)\b[:,!\s-]*", "", out)
+        out = re.sub(r"\s{2,}", " ", out).strip()
+        normalized = self._normalize_sentence_case(out)
+        normalized = re.sub(rf"(?i)\b{re.escape(country_title)}\b", country_title, normalized)
+        normalized = re.sub(rf"(?i)\b{re.escape(country_prep)}\b", country_prep, normalized)
+        return normalized
 
     @staticmethod
     def _country_prepositional(country: str) -> str:
@@ -429,31 +468,27 @@ class NewsFormatter:
         return False
 
     def _normalize_sentence_case(self, text: str) -> str:
+        """Capitalize sentence starts without lowercasing proper names.
+
+        Older formatting lowercased every token except the first one, which broke
+        city names and other proper nouns.  This method only uppercases the first
+        alphabetic character after a sentence boundary and preserves the rest.
+        """
         if not text:
             return text
-        parts = re.split(r"([.!?]\s+)", text)
-        out: list[str] = []
-        for part in parts:
-            if not part:
+        result: list[str] = []
+        capitalize_next = True
+        for char in text.strip():
+            if capitalize_next and char.isalpha():
+                result.append(char.upper())
+                capitalize_next = False
                 continue
-            if re.fullmatch(r"[.!?]\s+", part):
-                out.append(part)
-                continue
-            tokens = part.split()
-            if not tokens:
-                out.append(part)
-                continue
-            normalized = []
-            for idx, tok in enumerate(tokens):
-                if tok.startswith("#") or tok.isupper():
-                    normalized.append(tok)
-                    continue
-                if idx == 0:
-                    normalized.append(tok[:1].upper() + tok[1:].lower())
-                else:
-                    normalized.append(tok.lower())
-            out.append(" ".join(normalized))
-        return "".join(out).strip()
+            result.append(char)
+            if char in ".!?\n":
+                capitalize_next = True
+            elif not char.isspace():
+                capitalize_next = False
+        return "".join(result).strip()
 
     def _subjectify_if_possible(self, country: str, text: str, aliases: list[str] | None = None) -> tuple[str, str]:
         compact = text.strip()
@@ -472,13 +507,21 @@ class NewsFormatter:
             return self._split_country_and_body(country, compact, aliases)
         verb = self.verb_replacements.get(verb_raw, verb_raw)
         body = f"{verb} {rest}".strip()
-        body = self._normalize_sentence_case(body)
-        return subject_raw, body
+        return subject_raw, self._lower_initial_news_verb(body)
 
     @staticmethod
     def _is_feminine_subject(subject: str) -> bool:
         low = subject.strip().lower()
         return low.endswith(("ия", "а", "я", "ь"))
+
+    def _lower_initial_news_verb(self, text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return stripped
+        first = stripped.split(maxsplit=1)[0].lower().strip(',.;:!?«»"\'')
+        if first in set(self.verb_replacements.values()):
+            return stripped[:1].lower() + stripped[1:]
+        return stripped
 
     def _normalize_official_body(self, subject: str, body: str) -> str:
         compact = body.strip()
@@ -497,7 +540,7 @@ class NewsFormatter:
             compact = re.sub(r"(?i)\bсоздали\b", "создает", compact, count=1)
             compact = re.sub(r"(?i)\bсозда[её]м\b", "создает", compact, count=1)
 
-        return self._normalize_sentence_case(compact)
+        return self._lower_initial_news_verb(self._normalize_sentence_case(compact))
 
     def _emoji_label(self, paragraph: str) -> str:
         low = paragraph.lower()
@@ -636,11 +679,10 @@ class NewsFormatter:
         aliases = (country_aliases or {}).get(country, [])
         subject, body = self._subjectify_if_possible(country, cleaned, aliases)
         body = self._normalize_official_body(subject, body)
-        if self._body_mentions_country(body, country, aliases):
-            subject = ""
+        # The rendered headline always starts with the resolved country name so
+        # the country can be bolded consistently even when the body also mentions it.
         headline, details = self._split_headline_details(body)
-        include_subject = not self._contains_country_reference(body, country, aliases)
-        visible_subject = subject if include_subject else ""
+        visible_subject = (subject or country).strip()
 
         emoji_char, emoji_id = self._emoji_char_and_id(headline, premium_emoji_ids)
 

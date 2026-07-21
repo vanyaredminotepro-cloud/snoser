@@ -108,7 +108,8 @@ TG_BOT_TOKEN=123456:ABCDEF...
 ```env
 ADMIN_ID=5006629901
 ADMIN_USERNAME=@your_admin_username
-TARGET_CHANNEL=@your_target_channel
+TARGET_CHANNEL=-1002446986804
+TARGET_TOPIC_ID=65881
 SESSION_NAME=news_userbot
 SQLITE_PATH=app/storage/bot_data.sqlite3
 LOGS_DIR=logs
@@ -128,10 +129,25 @@ HEALTHCHECK_ENABLED=true
 Изменяемые параметры:
 - источники
 - хештеги стран
-- target channel
+- target chat/supergroup and topic id
 - admin id
 - задержка публикации (до 3 сек)
 - путь SQLite
+
+## Публикация в супергруппу с темами
+
+По умолчанию бот публикует новости в супергруппу `-1002446986804` в тему `65881`.
+Для Railway/production можно переопределить эти значения переменными:
+
+```env
+TARGET_CHAT_ID=-1002446986804
+TARGET_TOPIC_ID=65881
+```
+
+`TARGET_CHANNEL` сохранён для обратной совместимости: его можно использовать как username канала или numeric ID чата.
+Для forum topics `TARGET_TOPIC_ID` передаётся как `reply_to` в Telethon-публикациях и как `message_thread_id` при fallback-отправке через Bot API.
+
+Бот также принимает новости в личных сообщениях: пользователь отправляет текст/подпись/медиа с финальным хештегом страны, после чего пост проходит существующие RP/AI-фильтры и попадает в общую очередь.
 
 ## Запуск локально
 
