@@ -70,6 +70,15 @@ class NewsService:
     def attach_user_client(self, client: TelegramClient) -> None:
         self.user_client = client
 
+    def _target_reply_to(self, reply_to: int | None = None) -> int | None:
+        """Return the message id used by Telegram forum topics for threaded posts.
+
+        In Telegram supergroups with topics, Telethon publishes into a topic by
+        replying to the topic starter/root message.  Per-call reply targets still
+        take precedence for normal threaded replies.
+        """
+        return reply_to if reply_to is not None else config.target_topic_id
+
     async def _send_to_target_channel(
         self,
         text: str,
@@ -79,22 +88,24 @@ class NewsService:
         reply_to: int | None = None,
     ) -> bool:
         if not self.user_client:
-            logger.warning("Target channel publish skipped: user session is not connected yet.")
+            logger.warning("Target topic publish skipped: user session is not connected yet.")
             return False
+        target_reply_to = self._target_reply_to(reply_to)
         if formatting_entities is not None:
             await self.user_client.send_message(
                 config.target_channel,
                 text,
                 formatting_entities=formatting_entities,
-                reply_to=reply_to,
+                reply_to=target_reply_to,
             )
         else:
             await self.user_client.send_message(
                 config.target_channel,
                 text,
                 parse_mode=parse_mode,
-                reply_to=reply_to,
+                reply_to=target_reply_to,
             )
+        logger.info("Sent text publication to %s topic=%s", config.target_channel, target_reply_to)
         return True
 
     async def load_dynamic_config(self) -> None:
@@ -621,7 +632,7 @@ class NewsService:
             if self.user_client:
                 await self._send_with_retry(lambda: self._send_to_target_channel(text, parse_mode="html"))
             else:
-                await self.bot.send_message(config.target_channel, text, parse_mode="HTML")
+                await self.bot.send_message(config.target_channel, text, parse_mode="HTML", message_thread_id=config.target_topic_id)
             return True
         except Exception:
             logger.exception("Failed to publish mobilization start news for %s", country)
@@ -1729,7 +1740,12 @@ class NewsService:
             await self._wait_human_publish_delay()
             if self.user_client and post.media_file_id:
                 await self._send_with_retry(
-                    lambda: self.user_client.send_file(config.target_channel, file=post.media_file_id, caption=caption[:1024])
+                    lambda: self.user_client.send_file(
+                        config.target_channel,
+                        file=post.media_file_id,
+                        caption=caption[:1024],
+                        reply_to=self._target_reply_to(),
+                    )
                 )
             else:
                 logger.warning("Skipping media publish %s/%s until user session connects.", post.source_channel, post.message_id)

@@ -12,6 +12,7 @@ def test_config_reads_runtime_overrides(monkeypatch):
     monkeypatch.setenv("ADMIN_ID", "123")
     monkeypatch.setenv("ADMIN_USERNAME", "@admin")
     monkeypatch.setenv("TARGET_CHANNEL", "@chan")
+    monkeypatch.setenv("TARGET_TOPIC_ID", "12345")
     monkeypatch.setenv("SESSION_NAME", "session_test")
     monkeypatch.setenv("SQLITE_PATH", "tmp/test.sqlite3")
     monkeypatch.setenv("LOGS_DIR", "tmp/logs")
@@ -32,6 +33,7 @@ def test_config_reads_runtime_overrides(monkeypatch):
     assert cfg.admin_id == 123
     assert cfg.admin_username == "@admin"
     assert cfg.target_channel == "@chan"
+    assert cfg.target_topic_id == 12345
     assert cfg.session_name == "session_test"
     assert str(cfg.sqlite_path) == "tmp/test.sqlite3"
     assert str(cfg.logs_dir) == "tmp/logs"
@@ -67,3 +69,16 @@ def test_config_rejects_invalid_long_pause_chance(monkeypatch):
         assert "LONG_PAUSE_CHANCE" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError for invalid long pause chance")
+
+
+def test_config_defaults_to_topic_supergroup(monkeypatch):
+    monkeypatch.delenv("TARGET_CHANNEL", raising=False)
+    monkeypatch.delenv("TARGET_GROUP_ID", raising=False)
+    monkeypatch.delenv("TARGET_CHAT_ID", raising=False)
+    monkeypatch.delenv("TARGET_TOPIC_ID", raising=False)
+    monkeypatch.delenv("NEWS_TOPIC_ID", raising=False)
+
+    cfg = Config()
+
+    assert cfg.target_channel == -1002446986804
+    assert cfg.target_topic_id == 65881

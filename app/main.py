@@ -138,7 +138,7 @@ async def _control_server(port: int, db: Database, service: NewsService | None =
                         if service.user_client:
                             await service._send_with_retry(lambda: service._send_to_target_channel(text, parse_mode="html"))
                         else:
-                            await service.bot.send_message(config.target_channel, text, parse_mode="HTML")
+                            await service.bot.send_message(config.target_channel, text, parse_mode="HTML", message_thread_id=config.target_topic_id)
                         await db.set_state("webhook:last_research_start", json.dumps(event, ensure_ascii=False))
                         count = int(await db.get_state("metric:webhook_research_start_total", "0") or "0")
                         await db.set_state("metric:webhook_research_start_total", str(count + 1))

@@ -692,8 +692,13 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await message.answer("Отказ отправлен пользователю.")
         await state.clear()
 
-    @router.message(WriteNewsState.waiting_text)
-    async def write_news_flow(message: Message, state: FSMContext) -> None:
+    async def _enqueue_manual_news(message: Message, state: FSMContext, *, source_channel: str) -> None:
+        """Validate a private/manual submission and enqueue it through existing filters.
+
+        Users may send news directly to the bot in private messages.  The RP and
+        AI filters are intentionally not duplicated here; the queued IncomingPost
+        is processed by NewsService.process_post exactly like channel messages.
+        """
         if not await _guard_message(message):
             return
         text = _normalize_hashtags_to_english((message.caption or message.text or "").strip())
@@ -739,7 +744,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
         file_id, media_type = _extract_media(message)
         post = IncomingPost(
             source_country=claimed_country,
-            source_channel="manual_admin",
+            source_channel=source_channel,
             message_id=message.message_id,
             text=text,
             has_media=bool(file_id),
@@ -751,7 +756,13 @@ def bind_admin_handlers(service: NewsService) -> Router:
         await service.enqueue(post)
         await state.update_data(pending_news_text="")
         await state.clear()
+        logger.info("Manual/private news queued from user=%s message=%s country=%s", user_id, message.message_id, claimed_country)
         await message.answer("Принято в очередь")
+
+    @router.message(WriteNewsState.waiting_text)
+    async def write_news_flow(message: Message, state: FSMContext) -> None:
+        await _enqueue_manual_news(message, state, source_channel="manual_admin")
+
     @router.callback_query(F.data.startswith("mod:"))
     async def moderation_callback(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _guard_callback(callback):
@@ -848,6 +859,18 @@ def bind_admin_handlers(service: NewsService) -> Router:
             await service.publish_and_mark(post, formatted, entities, hash_value)
         await message.answer("Исправлено и опубликовано.")
         await state.clear()
+
+
+    @router.message(F.chat.type == "private")
+    async def private_news_submission(message: Message, state: FSMContext) -> None:
+        current_state = await state.get_state()
+        if current_state and current_state != WriteNewsState.waiting_text.state:
+            return
+        if message.text and message.text.startswith("/"):
+            return
+        if not (message.text or message.caption or message.photo or message.video or message.animation or message.document):
+            return
+        await _enqueue_manual_news(message, state, source_channel="private_dm")
 
 
     @router.message(F.text)
