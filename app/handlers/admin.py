@@ -338,7 +338,7 @@ def bind_admin_handlers(service: NewsService) -> Router:
             else:
                 user_countries = _user_allowed_countries(callback.from_user.id)
                 primary = user_countries[0] if user_countries else rows[0][0]
-                card = await service.render_country_stats_card(primary)
+                card = await service.render_warlord_country_card(primary)
                 await callback.message.answer(card, parse_mode="HTML")
             return
         if action == "mobilization":
