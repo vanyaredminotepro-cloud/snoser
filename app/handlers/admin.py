@@ -196,18 +196,11 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
 
 
 def _main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="📰 Написать новость", callback_data="menu:write_news")],
-        [InlineKeyboardButton(text="📝 Анкета / создать страну", callback_data="menu:anketa")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats")],
-        [InlineKeyboardButton(text="📊 Статистика стран (скоро)", callback_data="menu:country_stats")],
-        [InlineKeyboardButton(text="🔬 Исследования (WEB)", url=config.web_dashboard_url)],
-        [InlineKeyboardButton(text="⚔️ Мобилизация", callback_data="menu:mobilization")],
-        [InlineKeyboardButton(text="🧾 Оспорить отклонение", callback_data="menu:appeal")],
-    ]
-    if is_admin:
-        rows.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="menu:admin")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔬 Древо Исследований", url=config.web_dashboard_url)],
+        ]
+    )
 
 
 def _mobilization_types_keyboard() -> InlineKeyboardMarkup:

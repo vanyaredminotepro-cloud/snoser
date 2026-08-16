@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "exclusive_denial": "⚠️ Данная технология является закрытой национальной разработкой Паониции!",
+  "banned_tech": [
+    "tanks",
+    "ifv",
+    "heavy_tracked_armor",
+    "mlrs",
+    "piloted_aircraft",
+    "nuclear_wmd",
+    "chemical_wmd",
+    "cruisers",
+    "destroyers"
+  ],
+  "tiers": {
+    "ultralight": {"label": "Сверхлёгкое", "hours": 6, "cost": 1000},
+    "light": {"label": "Лёгкое", "hours": 12, "cost": 3000},
+    "medium": {"label": "Среднее", "hours": 24, "cost": 7000},
+    "heavy": {"label": "Тяжёлое", "hours": 48, "cost": 15000},
+    "superheavy": {"label": "Сверхтяжёлое", "hours": 72, "cost": 30000}
+  },
+  "branches": [
+    {
+      "id": "infantry",
+      "title": "🪖 Пехота и снаряжение",
+      "techs": [
+        {"id": "optics_base", "title": "Прицелы и рации", "tier": "ultralight", "description": "Базовые прицелы, рации и комплект связи для малых подразделений.", "requires": [], "building_required": null},
+        {"id": "light_armor", "title": "Бронежилеты 2-3 класса", "tier": "light", "description": "Лёгкая защита пехоты для патрулей и охраны объектов.", "requires": ["optics_base"], "building_required": null},
+        {"id": "tactical_comms", "title": "Шлемы и шифрованная связь", "tier": "medium", "description": "Активные наушники, шлемы и закрытые каналы связи.", "requires": ["light_armor"], "building_required": null},
+        {"id": "heavy_exo_vest", "title": "Тяжёлая штурмовая броня", "tier": "heavy", "description": "Усиленные жилеты и разгрузка для штурмовых групп без экзоскелетов и фантастики.", "requires": ["tactical_comms"], "building_required": "Военный завод"}
+      ]
+    },
+    {
+      "id": "wheeled_armor",
+      "title": "🛞 Колёсная бронетехника",
+      "techs": [
+        {"id": "heavy_chassis", "title": "Усиленная рама", "tier": "light", "description": "Полный привод, усиленная подвеска и ДВС для бронемашин.", "requires": [], "building_required": null},
+        {"id": "composite_armor", "title": "Противоминное днище", "tier": "medium", "description": "Бронелисты и противоминная компоновка для колёсной техники.", "requires": ["heavy_chassis"], "building_required": null},
+        {"id": "turret_system", "title": "Дистанционная пулемётная башня", "tier": "heavy", "description": "Лёгкие дистанционные пулемётные модули без пушек и РСЗО.", "requires": ["composite_armor"], "building_required": "Военный завод"},
+        {"id": "brdm_assembly", "title": "Сборка БРДМ-4x4/6x6", "tier": "superheavy", "description": "Производство ограниченной колёсной бронетехники разведки и сопровождения.", "requires": ["turret_system"], "building_required": "Исследовательский центр"}
+      ]
+    },
+    {
+      "id": "navy_logistics",
+      "title": "🚢 Флот и водная логистика",
+      "techs": [
+        {"id": "patrol_boat", "title": "Патрульный катер", "tier": "light", "description": "Патрульный катер с пулемётом для береговой охраны.", "requires": [], "building_required": null, "capacity": "Патруль и охрана"},
+        {"id": "landing_craft", "title": "Малый десантный катер", "tier": "medium", "description": "Перевозит 1 отряд пехоты или 1 лёгкий пикап.", "requires": ["patrol_boat"], "building_required": null, "capacity": "1 отряд пехоты или 1 лёгкий пикап"},
+        {"id": "transport_barge", "title": "Грузовая баржа", "tier": "heavy", "description": "Перевозит до 2 единиц колёсной бронетехники БРДМ.", "requires": ["landing_craft"], "building_required": "Верфь", "capacity": "до 2 БРДМ"},
+        {"id": "rocket_boat", "title": "Ударный катер береговой охраны", "tier": "superheavy", "description": "Малый ударный катер береговой обороны без крупных корабельных классов.", "requires": ["transport_barge"], "building_required": "Верфь"}
+      ]
+    },
+    {
+      "id": "drones_artillery",
+      "title": "🚀 Дроны и артиллерия",
+      "techs": [
+        {"id": "recon_drones", "title": "Квадрокоптеры-разведчики", "tier": "light", "description": "Малые разведывательные дроны для наблюдения.", "requires": [], "building_required": null},
+        {"id": "light_mortars", "title": "Носимые миномёты до 120-мм", "tier": "heavy", "description": "Лёгкая миномётная поддержка без РСЗО.", "requires": ["recon_drones"], "building_required": "Военный завод"},
+        {"id": "fpv_strike", "title": "FPV-дроны камикадзе", "tier": "superheavy", "description": "Ограниченные ударные FPV-дроны по правилам боя и доказательств.", "requires": ["light_mortars"], "building_required": "Исследовательский центр"}
+      ]
+    },
+    {
+      "id": "oyat_acid",
+      "title": "☢️ ОЯТ и кислотное оружие",
+      "exclusive_country_code": "paonitsiya",
+      "exclusive_country_title": "Паониция",
+      "techs": [
+        {"id": "oyat_processing", "title": "Извлечение и консервация ОЯТ", "tier": "light", "description": "Закрытая национальная ветка Паониции: безопасная консервация ОЯТ.", "requires": [], "building_required": null},
+        {"id": "acid_canisters", "title": "Кислотные баллоны и фугасы", "tier": "medium", "description": "Едкие баллоны и фугасы в рамках закрытой ветки Паониции.", "requires": ["oyat_processing"], "building_required": null},
+        {"id": "acid_shells", "title": "Хим-снаряды для миномётов", "tier": "heavy", "description": "Ограниченные кислотные боеприпасы; не являются ОМП массового поражения.", "requires": ["acid_canisters"], "building_required": "Военный завод"},
+        {"id": "acid_aerosol", "title": "Аэрозольные системы ОЯТ", "tier": "superheavy", "description": "Закрытая поздняя разработка Паониции: едкие мины и распылители по регламенту.", "requires": ["acid_shells"], "building_required": "Исследовательский центр"}
+      ]
+    }
+  ]
+}
