@@ -19,6 +19,7 @@ from telethon.errors import FloodWaitError, RPCError
 
 from app.config import config
 from app.core.models import IncomingPost
+from app.core.warlord_autonomy import CountryCardInput, WarlordAutonomyCore
 from app.filters.ai_guard import AIGuard
 from app.filters.rp_filter import RPFilter
 from app.formatters.news_formatter import NewsFormatter
@@ -1158,6 +1159,82 @@ class NewsService:
             f"<b>Уровень жизни:</b> <i>{life}</i>/100"
             "</blockquote>"
         )
+
+    async def render_warlord_country_card(self, country: str) -> str:
+        """Render the autonomous 2-hour Warlord RP country card.
+
+        The card follows the strict Warlord RP template: deterministic economy
+        math, empty-flag request, state dynamics only when a previous snapshot
+        exists and values changed, and concise violation/notification output.
+        """
+        stats = await self.db.get_country_stats(country)
+        if not stats:
+            return "Для вашей страны пока нет данных в статистике."
+
+        budget, army, citizens, life = stats
+        extra = await self.db.list_country_extra_metrics()
+        metrics = extra.get(country, {})
+        factories = await self.db.get_military_factories(country)
+        resources = await self.db.get_country_resources(country)
+        prev_raw = await self.db.get_state(f"warlord_card_snapshot:{country}", "{}")
+        try:
+            prev = json.loads(prev_raw)
+        except Exception:
+            prev = {}
+
+        ruler_ids = config.manual_country_authors.get(country, [])
+        ruler = f"ID {ruler_ids[0]}" if ruler_ids else "-"
+        leader_mention = f"@{ruler_ids[0]}" if ruler_ids else config.admin_username
+        stability = int(metrics.get("stability_index", 50))
+        happiness = life
+        war_status, risk = await self.db.get_country_war_and_risk(country)
+        war_support = min(100, max(0, 50 + risk if war_status != "peace" else 35 - risk))
+        oil, metal, grain = resources
+        industry = [f"Военные заводы: {factories}", f"Ресурсы: нефть {oil}, металл {metal}, зерно {grain}"]
+
+        card = WarlordAutonomyCore.render_country_card(
+            CountryCardInput(
+                country=country,
+                ruler=ruler,
+                ruler_mention=leader_mention,
+                citizens=citizens,
+                previous_citizens=prev.get("citizens"),
+                capacity=max(citizens, 100),
+                budget=budget,
+                previous_budget=prev.get("budget"),
+                soldiers=army,
+                previous_soldiers=prev.get("army"),
+                tax_level="Средний",
+                settlements=["-"],
+                industry=industry,
+                researches=[],
+                stability=stability,
+                previous_stability=prev.get("stability"),
+                war_support=war_support,
+                previous_war_support=prev.get("war_support"),
+                happiness=happiness,
+                previous_happiness=prev.get("happiness"),
+                events=["Автономное ядро пересчитало экономику, содержание армии и общественные показатели."],
+                flag_present=False,
+                channel_has_avatar=country in config.source_channels,
+                factories=factories,
+            )
+        )
+        await self.db.set_state(
+            f"warlord_card_snapshot:{country}",
+            json.dumps(
+                {
+                    "budget": budget,
+                    "army": army,
+                    "citizens": citizens,
+                    "stability": stability,
+                    "war_support": war_support,
+                    "happiness": happiness,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return card
 
     async def render_global_stats(self) -> str:
         rows = await self.db.list_country_stats()
